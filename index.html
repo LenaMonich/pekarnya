@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Пекарня</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --bg2: var(--tg-theme-secondary-bg-color, #f2f2f5);
+    --text: var(--tg-theme-text-color, #1c1c1e);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --accent: var(--tg-theme-button-color, #c0561f);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --warn: #e08a00;
+    --line: rgba(128,128,128,.18);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg2); color: var(--text);
+    font: 16px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg2); padding: 10px 12px 6px; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .chip { border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    border-radius: 18px; padding: 7px 14px; font-size: 15px; }
+  .chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .extra { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 8px; }
+  .extra input { width: 20px; height: 20px; accent-color: var(--accent); }
+  #search { width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); font-size: 16px; }
+  .nav { display: flex; gap: 6px; overflow-x: auto; margin-top: 8px; padding-bottom: 2px; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav button { flex: none; border: none; background: var(--bg); color: var(--accent); border-radius: 14px;
+    padding: 5px 11px; font-size: 13px; white-space: nowrap; }
+  .cat { scroll-margin-top: var(--hdr, 150px); margin: 14px 12px 4px; font-size: 13px; text-transform: uppercase; color: var(--hint); letter-spacing: .03em; }
+  .list { background: var(--bg); margin: 0 12px; border-radius: 12px; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: none; }
+  .row.sel { background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+  .name { flex: 1; min-width: 0; }
+  .name b { font-weight: 500; display: block; }
+  .stock { font-size: 12px; color: var(--hint); }
+  .stock.low { color: var(--warn); font-weight: 600; }
+  .qty { display: flex; align-items: center; gap: 4px; }
+  .qty button { width: 36px; height: 36px; border-radius: 10px; border: none; font-size: 20px;
+    background: var(--bg2); color: var(--text); }
+  .qty input { width: 56px; height: 36px; text-align: center; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); font-size: 16px; }
+  .qty input.g { width: 84px; }
+  .unit { font-size: 13px; color: var(--hint); width: 14px; }
+  #msg { margin: 30px 16px; text-align: center; color: var(--hint); }
+  #summary { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    background: var(--bg); border-top: 1px solid var(--line); font-size: 14px; display: none; }
+  #summary button { width: 100%; margin-top: 8px; padding: 13px; border: none; border-radius: 12px;
+    background: var(--accent); color: var(--accent-text); font-size: 16px; font-weight: 600; }
+  .pad { height: 120px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">…</h1>
+  <div id="rests" class="chips" style="display:none"></div>
+  <label id="extraBox" class="extra" style="display:none"><input type="checkbox" id="extra"> ⚡ Доп. рейс сегодня (бланк придёт сразу)</label>
+  <input id="search" type="search" placeholder="Поиск продукта">
+  <div id="nav" class="nav"></div>
+</header>
+<div id="msg">Загрузка…</div>
+<div id="content"></div>
+<div class="pad"></div>
+<div id="summary"><div id="sumText"></div><button id="saveBtn">Записать</button></div>
+
+<script>
+(function () {
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const q = new URLSearchParams(location.search);
+  const MODE = q.get('mode') === 's' ? 's' : 'r';          // r — выпуск, s — отгрузка
+  const API = q.get('api') || '';
+  const KEY = q.get('k') || '';
+  const CACHE = 'pek_catalog_v1';
+
+  let catalog = null;          // {products:[{code,name,cat,unit}], restaurants:[], stock:{}}
+  const qty = {};              // code -> число
+  let rest = null;
+
+  const $ = id => document.getElementById(id);
+  $('title').textContent = MODE === 's' ? '🚚 Отгрузка' : '🍞 Выпуск';
+
+  if (tg) { tg.ready(); tg.expand(); }
+  // Если открыли не из бота — сохранять нечем, но страницу показываем
+  const canSend = !!(tg && tg.sendData && tg.platform && tg.platform !== 'unknown');
+
+  // 1) показываем сохранённый справочник сразу (мгновенно), 2) обновляем с сервера
+  try { const c = localStorage.getItem(CACHE); if (c) { catalog = JSON.parse(c); render(); } } catch (e) {}
+  if (API) {
+    fetch(API + (API.indexOf('?') >= 0 ? '&' : '?') + 'a=catalog&k=' + encodeURIComponent(KEY), { redirect: 'follow' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d || !d.products) throw new Error(d && d.error || 'нет данных');
+        catalog = d;
+        try { localStorage.setItem(CACHE, JSON.stringify(d)); } catch (e) {}
+        render();
+      })
+      .catch(err => { if (!catalog) $('msg').textContent = 'Не удалось загрузить список продуктов: ' + err.message; });
+  } else if (!catalog) {
+    $('msg').textContent = 'Откройте эту страницу кнопкой в боте.';
+  }
+
+  function render() {
+    if (!catalog) return;
+    $('msg').style.display = 'none';
+    if (MODE === 's') renderRestaurants();
+    renderList();
+    updateSummary();
+  }
+
+  function renderRestaurants() {
+    const box = $('rests');
+    box.style.display = 'flex';
+    $('extraBox').style.display = 'flex';
+    box.innerHTML = '';
+    if (rest === null && catalog.restaurants.length === 1) rest = 0;
+    catalog.restaurants.forEach((r, i) => {
+      const b = document.createElement('button');
+      b.className = 'chip' + (rest === i ? ' on' : '');
+      b.textContent = r;
+      b.onclick = () => { rest = i; haptic(); renderRestaurants(); updateSummary(); };
+      box.appendChild(b);
+    });
+  }
+
+  function renderList() {
+    const filter = $('search').value.trim().toLowerCase();
+    const root = $('content');
+    root.innerHTML = '';
+    let lastCat = null, list = null;
+    const nav = $('nav');
+    nav.innerHTML = '';
+    catalog.products.forEach(p => {
+      if (filter && p.name.toLowerCase().indexOf(filter) < 0) return;
+      if (p.cat !== lastCat) {
+        const h = document.createElement('div');
+        h.className = 'cat'; h.textContent = p.cat; root.appendChild(h);
+        const nb = document.createElement('button');
+        nb.textContent = p.cat;
+        nb.onclick = () => {
+          const top = h.getBoundingClientRect().top + window.scrollY - document.querySelector('header').offsetHeight - 4;
+          window.scrollTo({ top: top, behavior: 'smooth' });
+        };
+        nav.appendChild(nb);
+        list = document.createElement('div'); list.className = 'list'; root.appendChild(list);
+        lastCat = p.cat;
+      }
+      list.appendChild(row(p));
+    });
+    if (!root.children.length) root.innerHTML = '<div id="msg2" style="text-align:center;color:var(--hint);margin:30px">Ничего не найдено</div>';
+  }
+
+  function row(p) {
+    const grams = p.unit === 'г';
+    const d = document.createElement('div');
+    d.className = 'row' + (qty[p.code] ? ' sel' : '');
+    const st = Number(catalog.stock[p.code] || 0);
+    const low = MODE === 's' && qty[p.code] > st;
+    d.innerHTML = '<div class="name"><b></b><span class="stock' + (low ? ' low' : '') + '"></span></div>' +
+      '<div class="qty">' + (grams ? '' : '<button class="m">−</button>') +
+      '<input inputmode="numeric" pattern="[0-9]*" class="' + (grams ? 'g' : '') + '" placeholder="' + (grams ? 'грамм' : '0') + '">' +
+      (grams ? '<span class="unit">г</span>' : '<button class="p">+</button>') + '</div>';
+    d.querySelector('b').textContent = p.name;
+    d.querySelector('.stock').textContent = 'на складе: ' + st + ' ' + p.unit + (low ? ' — не хватает' : '');
+    const inp = d.querySelector('input');
+    inp.value = qty[p.code] || '';
+    const set = v => {
+      v = Math.max(0, Math.min(100000, parseInt(v, 10) || 0));
+      if (v) qty[p.code] = v; else delete qty[p.code];
+      inp.value = v || '';
+      d.classList.toggle('sel', !!v);
+      const lowNow = MODE === 's' && v > st;
+      const s = d.querySelector('.stock');
+      s.classList.toggle('low', lowNow);
+      s.textContent = 'на складе: ' + st + ' ' + p.unit + (lowNow ? ' — не хватает' : '');
+      updateSummary();
+    };
+    inp.addEventListener('input', () => set(inp.value.replace(/\D/g, '')));
+    const m = d.querySelector('.m'), pl = d.querySelector('.p');
+    if (m) m.onclick = () => { haptic(); set((qty[p.code] || 0) - 1); };
+    if (pl) pl.onclick = () => { haptic(); set((qty[p.code] || 0) + 1); };
+    return d;
+  }
+
+  $('search').addEventListener('input', renderList);
+
+  function items() { return Object.keys(qty).map(c => [c, qty[c]]); }
+
+  function updateSummary() {
+    const it = items();
+    const box = $('summary');
+    if (!it.length) { box.style.display = 'none'; if (tg) tg.MainButton.hide(); return; }
+    const byCode = {};
+    catalog.products.forEach(p => { byCode[p.code] = p; });
+    const n = it.length;
+    let txt = 'Выбрано позиций: ' + n;
+    if (MODE === 's') txt += rest === null ? ' · выберите ресторан ↑' : ' · ' + catalog.restaurants[rest];
+    $('sumText').textContent = txt;
+    box.style.display = 'block';
+  }
+
+  function haptic() { try { tg && tg.HapticFeedback.selectionChanged(); } catch (e) {} }
+
+  $('saveBtn').onclick = () => {
+    const it = items();
+    if (!it.length) return;
+    if (MODE === 's' && rest === null) { alertMsg('Выберите ресторан вверху.'); return; }
+    const byCode = {};
+    catalog.products.forEach(p => { byCode[p.code] = p; });
+    const lines = it.map(([c, v]) => (byCode[c] ? byCode[c].name : c) + ' — ' + v + ' ' + (byCode[c] ? byCode[c].unit : ''));
+    const head = MODE === 's'
+      ? 'Отгрузка → ' + catalog.restaurants[rest] + ($('extra').checked ? ' (доп. рейс)' : '')
+      : 'Выпуск';
+    const text = head + ':\n' + lines.join('\n');
+    const go = () => {
+      const payload = { m: MODE, i: it };
+      if (MODE === 's') { payload.r = catalog.restaurants[rest]; payload.x = $('extra').checked ? 1 : 0; }
+      const s = JSON.stringify(payload);
+      if (!canSend) { alertMsg('Откройте страницу кнопкой в боте — тогда можно сохранять.'); return; }
+      if (s.length > 4000) { alertMsg('Слишком много позиций за раз — разделите на две записи.'); return; }
+      tg.sendData(s);   // бот получит список и запишет в таблицу; окно закроется
+    };
+    // окно подтверждения Telegram вмещает ~250 символов — для длинного списка показываем кратко
+    const short = text.length < 230 ? text : head + ': ' + it.length + ' поз.';
+    if (canSend && tg.showConfirm) tg.showConfirm(short + '\n\nЗаписать?', ok => { if (ok) go(); });
+    else if (confirm(text + '\n\nЗаписать?')) go();
+  };
+
+  function alertMsg(t) { if (tg && tg.showAlert) tg.showAlert(t); else alert(t); }
+})();
+</script>
+</body>
+</html>
