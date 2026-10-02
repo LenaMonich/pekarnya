@@ -49,6 +49,12 @@
     background: var(--bg); color: var(--text); font-size: 16px; }
   .qty input.g { width: 84px; }
   .unit { font-size: 13px; color: var(--hint); width: 14px; }
+  .made { display: none; margin-top: 4px; font-size: 13px; color: var(--hint); }
+  .row.sel .made { display: block; }
+  .made select { font-size: 13px; padding: 3px 4px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); max-width: 100%; }
+  .made .per { margin-left: 6px; white-space: nowrap; }
+  .made .per.bad { color: #d9342b; font-weight: 600; }
   #msg { margin: 30px 16px; text-align: center; color: var(--hint); }
   #summary { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
     background: var(--bg); border-top: 1px solid var(--line); font-size: 14px; display: none; }
@@ -81,6 +87,10 @@
 
   let catalog = null;          // {products:[{code,name,cat,unit}], restaurants:[], stock:{}}
   const qty = {};              // code -> число
+  const made = {};             // code -> сколько дней назад сделан (0 — сегодня); только для отгрузки
+  const MAX_AGO = 10;
+  const pad = n => ('0' + n).slice(-2);
+  const dayText = ago => { const d = new Date(Date.now() - ago * 86400000); return pad(d.getDate()) + '.' + pad(d.getMonth() + 1); };
   let rest = null;
 
   const $ = id => document.getElementById(id);
@@ -162,7 +172,8 @@
     d.className = 'row' + (qty[p.code] ? ' sel' : '');
     const st = Number(catalog.stock[p.code] || 0);
     const low = MODE === 's' && qty[p.code] > st;
-    d.innerHTML = '<div class="name"><b></b><span class="stock' + (low ? ' low' : '') + '"></span></div>' +
+    d.innerHTML = '<div class="name"><b></b><span class="stock' + (low ? ' low' : '') + '"></span>' +
+      (MODE === 's' ? '<div class="made">📅 сделан: <select></select><span class="per"></span></div>' : '') + '</div>' +
       '<div class="qty">' + (grams ? '' : '<button class="m">−</button>') +
       '<input inputmode="numeric" pattern="[0-9]*" class="' + (grams ? 'g' : '') + '" placeholder="' + (grams ? 'грамм' : '0') + '">' +
       (grams ? '<span class="unit">г</span>' : '<button class="p">+</button>') + '</div>';
@@ -170,6 +181,27 @@
     d.querySelector('.stock').textContent = 'на складе: ' + st + ' ' + p.unit + (low ? ' — не хватает' : '');
     const inp = d.querySelector('input');
     inp.value = qty[p.code] || '';
+    // Дата изготовления: по умолчанию сегодня (день отгрузки), можно выбрать более раннюю
+    const sel = d.querySelector('.made select');
+    if (sel) {
+      for (let a = 0; a <= MAX_AGO; a++) {
+        const o = document.createElement('option');
+        o.value = a;
+        o.textContent = (a === 0 ? 'сегодня, ' : a === 1 ? 'вчера, ' : '') + dayText(a);
+        sel.appendChild(o);
+      }
+      sel.value = made[p.code] || 0;
+      const per = d.querySelector('.per');
+      const showPeriod = () => {
+        const ago = Number(sel.value) || 0;
+        if (p.days === null || p.days === undefined) { per.textContent = ''; return; }
+        per.textContent = 'срок ' + dayText(ago) + '–' + dayText(ago - p.days);
+        per.classList.toggle('bad', p.days - ago < 0);      // срок уже истёк
+        if (p.days - ago < 0) per.textContent += ' — истёк!';
+      };
+      sel.onchange = () => { const a = Number(sel.value) || 0; if (a) made[p.code] = a; else delete made[p.code]; showPeriod(); };
+      showPeriod();
+    }
     const set = v => {
       v = Math.max(0, Math.min(100000, parseInt(v, 10) || 0));
       if (v) qty[p.code] = v; else delete qty[p.code];
@@ -190,7 +222,8 @@
 
   $('search').addEventListener('input', renderList);
 
-  function items() { return Object.keys(qty).map(c => [c, qty[c]]); }
+  // [код, количество] или [код, количество, дней назад сделан]
+  function items() { return Object.keys(qty).map(c => (MODE === 's' && made[c] ? [c, qty[c], made[c]] : [c, qty[c]])); }
 
   function updateSummary() {
     const it = items();
@@ -213,7 +246,8 @@
     if (MODE === 's' && rest === null) { alertMsg('Выберите ресторан вверху.'); return; }
     const byCode = {};
     catalog.products.forEach(p => { byCode[p.code] = p; });
-    const lines = it.map(([c, v]) => (byCode[c] ? byCode[c].name : c) + ' — ' + v + ' ' + (byCode[c] ? byCode[c].unit : ''));
+    const lines = it.map(([c, v, ago]) => (byCode[c] ? byCode[c].name : c) + ' — ' + v + ' ' + (byCode[c] ? byCode[c].unit : '') +
+      (ago ? ' (сделан ' + dayText(ago) + ')' : ''));
     const head = MODE === 's'
       ? 'Отгрузка → ' + catalog.restaurants[rest] + ($('extra').checked ? ' (доп. рейс)' : '')
       : 'Выпуск';
