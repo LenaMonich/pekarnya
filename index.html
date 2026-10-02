@@ -33,7 +33,13 @@
   .nav::-webkit-scrollbar { display: none; }
   .nav button { flex: none; border: none; background: var(--bg); color: var(--accent); border-radius: 14px;
     padding: 5px 11px; font-size: 13px; white-space: nowrap; }
-  .cat { scroll-margin-top: var(--hdr, 150px); margin: 14px 12px 4px; font-size: 13px; text-transform: uppercase; color: var(--hint); letter-spacing: .03em; }
+  .cat { margin: 14px 12px 4px; padding: 4px 0; font-size: 13px; text-transform: uppercase; color: var(--hint);
+    letter-spacing: .03em; display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  .cat .arrow { display: inline-block; width: 14px; transition: transform .15s; }
+  .cat.closed .arrow { transform: rotate(-90deg); }
+  .cat .badge { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--accent); font-weight: 600; }
+  .cat .cnt { text-transform: none; letter-spacing: 0; opacity: .7; }
+  .list.closed { display: none; }
   .list { background: var(--bg); margin: 0 12px; border-radius: 12px; overflow: hidden; }
   .row { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
   .row:last-child { border-bottom: none; }
@@ -84,6 +90,13 @@
   const API = q.get('api') || '';
   const KEY = q.get('k') || '';
   const CACHE = 'pek_catalog_v1';
+  // Вид списка: 'c' — кондитер/админ (хлеб и выпечка внизу и свёрнуты), иначе — обычный порядок
+  const VIEW = q.get('v') || '';
+  const BAKER_CATS_DEFAULT = ['Pan', 'Cruasán y Bollería'];
+  const COLLAPSE_KEY = 'pek_collapsed_v1_' + MODE + '_' + VIEW;
+  let collapsed = null;        // {категория: true} — что свёрнуто; запоминается на этом телефоне
+  try { const c = localStorage.getItem(COLLAPSE_KEY); if (c) collapsed = JSON.parse(c); } catch (e) {}
+  const badges = {};           // категория -> элемент со счётчиком выбранного
 
   let catalog = null;          // {products:[{code,name,cat,unit}], restaurants:[], stock:{}}
   const qty = {};              // code -> число
@@ -139,31 +152,74 @@
     });
   }
 
+  function bakerCats() { return (catalog && catalog.bakerCats) || BAKER_CATS_DEFAULT; }
+
+  // Категории в нужном порядке: для кондитера/админа хлеб и выпечка — в конец
+  function orderedCats() {
+    const cats = [];
+    catalog.products.forEach(p => { if (cats.indexOf(p.cat) < 0) cats.push(p.cat); });
+    if (VIEW !== 'c') return cats;
+    const bk = bakerCats();
+    return cats.filter(c => bk.indexOf(c) < 0).concat(cats.filter(c => bk.indexOf(c) >= 0));
+  }
+
+  function saveCollapsed() { try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed)); } catch (e) {} }
+
   function renderList() {
     const filter = $('search').value.trim().toLowerCase();
     const root = $('content');
     root.innerHTML = '';
-    let lastCat = null, list = null;
     const nav = $('nav');
     nav.innerHTML = '';
-    catalog.products.forEach(p => {
-      if (filter && p.name.toLowerCase().indexOf(filter) < 0) return;
-      if (p.cat !== lastCat) {
-        const h = document.createElement('div');
-        h.className = 'cat'; h.textContent = p.cat; root.appendChild(h);
-        const nb = document.createElement('button');
-        nb.textContent = p.cat;
-        nb.onclick = () => {
-          const top = h.getBoundingClientRect().top + window.scrollY - document.querySelector('header').offsetHeight - 4;
-          window.scrollTo({ top: top, behavior: 'smooth' });
-        };
-        nav.appendChild(nb);
-        list = document.createElement('div'); list.className = 'list'; root.appendChild(list);
-        lastCat = p.cat;
-      }
-      list.appendChild(row(p));
+    if (collapsed === null) {                 // первый запуск: по умолчанию для роли
+      collapsed = {};
+      if (VIEW === 'c') bakerCats().forEach(c => { collapsed[c] = true; });
+    }
+    orderedCats().forEach(cat => {
+      const prods = catalog.products.filter(p => p.cat === cat && (!filter || p.name.toLowerCase().indexOf(filter) >= 0));
+      if (!prods.length) return;
+      const isClosed = !filter && !!collapsed[cat];   // при поиске всё раскрыто
+
+      const h = document.createElement('div');
+      h.className = 'cat' + (isClosed ? ' closed' : '');
+      h.innerHTML = '<span class="arrow">▾</span><span class="ttl"></span><span class="cnt"></span><span class="badge"></span>';
+      h.querySelector('.ttl').textContent = cat;
+      h.querySelector('.cnt').textContent = '· ' + prods.length;
+      badges[cat] = h.querySelector('.badge');
+      root.appendChild(h);
+
+      const list = document.createElement('div');
+      list.className = 'list' + (isClosed ? ' closed' : '');
+      prods.forEach(p => list.appendChild(row(p)));
+      root.appendChild(list);
+
+      const setClosed = v => {
+        if (v) collapsed[cat] = true; else delete collapsed[cat];
+        h.classList.toggle('closed', v);
+        list.classList.toggle('closed', v);
+        saveCollapsed();
+      };
+      h.onclick = () => { if (filter) return; haptic(); setClosed(!collapsed[cat]); };
+
+      const nb = document.createElement('button');
+      nb.textContent = cat;
+      nb.onclick = () => {
+        if (!filter && collapsed[cat]) setClosed(false);     // переход к разделу раскрывает его
+        const top = h.getBoundingClientRect().top + window.scrollY - document.querySelector('header').offsetHeight - 4;
+        window.scrollTo({ top: top, behavior: 'smooth' });
+      };
+      nav.appendChild(nb);
     });
     if (!root.children.length) root.innerHTML = '<div id="msg2" style="text-align:center;color:var(--hint);margin:30px">Ничего не найдено</div>';
+    updateBadges();
+  }
+
+  // У свёрнутого раздела видно, сколько в нём выбрано
+  function updateBadges() {
+    if (!catalog) return;
+    const n = {};
+    catalog.products.forEach(p => { if (qty[p.code]) n[p.cat] = (n[p.cat] || 0) + 1; });
+    Object.keys(badges).forEach(c => { badges[c].textContent = n[c] ? 'выбрано: ' + n[c] : ''; });
   }
 
   function row(p) {
@@ -226,6 +282,7 @@
   function items() { return Object.keys(qty).map(c => (MODE === 's' && made[c] ? [c, qty[c], made[c]] : [c, qty[c]])); }
 
   function updateSummary() {
+    updateBadges();
     const it = items();
     const box = $('summary');
     if (!it.length) { box.style.display = 'none'; if (tg) tg.MainButton.hide(); return; }
