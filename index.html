@@ -90,10 +90,14 @@
   const API = q.get('api') || '';
   const KEY = q.get('k') || '';
   const CACHE = 'pek_catalog_v1';
-  // Вид списка: 'c' — кондитер/админ (хлеб и выпечка внизу и свёрнуты), иначе — обычный порядок
+  // Вид списка по роли: 'c' — кондитер/админ, 'b' — пекарь, иначе — порядок как в таблице, всё раскрыто.
+  // order — какие разделы и в каком порядке идут первыми (остальные следом), closed — что свёрнуто по умолчанию.
   const VIEW = q.get('v') || '';
-  const BAKER_CATS_DEFAULT = ['Pan', 'Cruasán y Bollería'];
-  const COLLAPSE_KEY = 'pek_collapsed_v1_' + MODE + '_' + VIEW;
+  const VIEWS_DEFAULT = {
+    c: { order: ['Postre', 'Mermelada', 'Producto Semiacabado', 'Pan', 'Cruasán y Bollería'], closed: ['Pan', 'Cruasán y Bollería'] },
+    b: { order: ['Pan', 'Cruasán y Bollería', 'Producto Semiacabado', 'Mermelada', 'Postre'], closed: ['Mermelada', 'Postre'] },
+  };
+  const COLLAPSE_KEY = 'pek_collapsed_v2_' + MODE + '_' + VIEW;
   let collapsed = null;        // {категория: true} — что свёрнуто; запоминается на этом телефоне
   try { const c = localStorage.getItem(COLLAPSE_KEY); if (c) collapsed = JSON.parse(c); } catch (e) {}
   const badges = {};           // категория -> элемент со счётчиком выбранного
@@ -152,15 +156,17 @@
     });
   }
 
-  function bakerCats() { return (catalog && catalog.bakerCats) || BAKER_CATS_DEFAULT; }
+  // Настройки вида: из бота (catalog.views), иначе встроенные
+  function view() { return ((catalog && catalog.views) || VIEWS_DEFAULT)[VIEW] || null; }
 
-  // Категории в нужном порядке: для кондитера/админа хлеб и выпечка — в конец
+  // Категории в порядке для роли; разделы, которых нет в настройке вида, идут после перечисленных
   function orderedCats() {
     const cats = [];
     catalog.products.forEach(p => { if (cats.indexOf(p.cat) < 0) cats.push(p.cat); });
-    if (VIEW !== 'c') return cats;
-    const bk = bakerCats();
-    return cats.filter(c => bk.indexOf(c) < 0).concat(cats.filter(c => bk.indexOf(c) >= 0));
+    const v = view();
+    if (!v) return cats;
+    const first = v.order.filter(c => cats.indexOf(c) >= 0);
+    return first.concat(cats.filter(c => first.indexOf(c) < 0));
   }
 
   function saveCollapsed() { try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed)); } catch (e) {} }
@@ -173,7 +179,8 @@
     nav.innerHTML = '';
     if (collapsed === null) {                 // первый запуск: по умолчанию для роли
       collapsed = {};
-      if (VIEW === 'c') bakerCats().forEach(c => { collapsed[c] = true; });
+      const v = view();
+      if (v) v.closed.forEach(c => { collapsed[c] = true; });
     }
     orderedCats().forEach(cat => {
       const prods = catalog.products.filter(p => p.cat === cat && (!filter || p.name.toLowerCase().indexOf(filter) >= 0));
