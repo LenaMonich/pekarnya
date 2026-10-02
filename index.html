@@ -80,7 +80,7 @@
 (function () {
   const tg = window.Telegram && window.Telegram.WebApp;
   const q = new URLSearchParams(location.search);
-  const MODE = q.get('mode') === 's' ? 's' : 'r';          // r — выпуск, s — отгрузка
+  const MODE = q.get('mode') === 's' ? 's' : 'r';          // r — приготовлено (в таблице «Выпуск»), s — отгрузка
   const API = q.get('api') || '';
   const KEY = q.get('k') || '';
   const CACHE = 'pek_catalog_v1';
@@ -94,7 +94,7 @@
   let rest = null;
 
   const $ = id => document.getElementById(id);
-  $('title').textContent = MODE === 's' ? '🚚 Отгрузка' : '🍞 Выпуск';
+  $('title').textContent = MODE === 's' ? '🚚 Отгрузка' : '🍞 Приготовлено';
 
   if (tg) { tg.ready(); tg.expand(); }
   // Если открыли не из бота — сохранять нечем, но страницу показываем
@@ -250,7 +250,7 @@
       (ago ? ' (сделан ' + dayText(ago) + ')' : ''));
     const head = MODE === 's'
       ? 'Отгрузка → ' + catalog.restaurants[rest] + ($('extra').checked ? ' (доп. рейс)' : '')
-      : 'Выпуск';
+      : 'Приготовлено';
     const text = head + ':\n' + lines.join('\n');
     const go = () => {
       const payload = { m: MODE, i: it };
