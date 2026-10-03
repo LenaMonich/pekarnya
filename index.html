@@ -60,6 +60,9 @@
   .made select { font-size: 13px; padding: 3px 4px; border-radius: 7px; border: 1px solid var(--line);
     background: var(--bg); color: var(--text); max-width: 100%; }
   .made .per { margin-left: 6px; white-space: nowrap; }
+  .made.ret { line-height: 2; }
+  .made .note { display: block; width: 100%; max-width: 230px; margin-top: 4px; font-size: 13px; padding: 5px 7px;
+    border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
   .made .per.bad { color: #d9342b; font-weight: 600; }
   #msg { margin: 30px 16px; text-align: center; color: var(--hint); }
   #summary { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
@@ -86,7 +89,10 @@
 (function () {
   const tg = window.Telegram && window.Telegram.WebApp;
   const q = new URLSearchParams(location.search);
-  const MODE = q.get('mode') === 's' ? 's' : 'r';          // r — приготовлено (в таблице «Выпуск»), s — отгрузка
+  // r — приготовлено (в таблице «Выпуск»), s — отгрузка, b — возврат от ресторана, w — списание
+  const MODE = ['s', 'b', 'w'].indexOf(q.get('mode')) >= 0 ? q.get('mode') : 'r';
+  const CHECK_STOCK = MODE === 's' || MODE === 'w';      // подсвечивать, если берём больше, чем есть на складе
+  const NEEDS_REST = MODE === 's' || MODE === 'b';
   const API = q.get('api') || '';
   const KEY = q.get('k') || '';
   const CACHE = 'pek_catalog_v1';
@@ -105,13 +111,24 @@
   let catalog = null;          // {products:[{code,name,cat,unit}], restaurants:[], stock:{}}
   const qty = {};              // code -> число
   const made = {};             // code -> сколько дней назад сделан (0 — сегодня); только для отгрузки
+  const dest = {};             // code -> 1: на склад (иначе утилизация); только для возврата
+  const reason = {};           // code -> номер причины; для возврата и списания
+  const note = {};             // code -> комментарий к списанию (необязательно)
+  const REASONS_DEFAULT = ['Брак', 'Ошибка в заказе', 'Другое'];
+  const WRITEOFF_DEFAULT = ['Брак', 'Недопёк / пережарен', 'Просрочка', 'Порча при хранении или перевозке', 'Ошибка / пересорт', 'Проработка', 'Персонал', 'Другое'];
+  const offReasons = () => (catalog && catalog.writeoffReasons) || WRITEOFF_DEFAULT;
+  const retReasons = () => (catalog && catalog.returnReasons) || REASONS_DEFAULT;
+  // Причины для продукта: списание и возврат в утилизацию — причины списания; возврат на склад — причины возврата
+  const reasonsFor = code => (MODE === 'w' || (MODE === 'b' && !dest[code])) ? offReasons() : retReasons();
+  const reasonText = code => { const l = reasonsFor(code); return l[reason[code] || 0] || l[0]; };
   const MAX_AGO = 10;
   const pad = n => ('0' + n).slice(-2);
   const dayText = ago => { const d = new Date(Date.now() - ago * 86400000); return pad(d.getDate()) + '.' + pad(d.getMonth() + 1); };
   let rest = null;
 
   const $ = id => document.getElementById(id);
-  $('title').textContent = MODE === 's' ? '🚚 Отгрузка' : '🍞 Приготовлено';
+  $('title').textContent = MODE === 's' ? '🚚 Отгрузка' : MODE === 'b' ? '↩️ Возврат от ресторана'
+    : MODE === 'w' ? '🗑 Списание' : '🍞 Приготовлено';
 
   if (tg) { tg.ready(); tg.expand(); }
   // Если открыли не из бота — сохранять нечем, но страницу показываем
@@ -136,7 +153,7 @@
   function render() {
     if (!catalog) return;
     $('msg').style.display = 'none';
-    if (MODE === 's') renderRestaurants();
+    if (NEEDS_REST) renderRestaurants();
     renderList();
     updateSummary();
   }
@@ -144,7 +161,7 @@
   function renderRestaurants() {
     const box = $('rests');
     box.style.display = 'flex';
-    $('extraBox').style.display = 'flex';
+    if (MODE === 's') $('extraBox').style.display = 'flex';
     box.innerHTML = '';
     if (rest === null && catalog.restaurants.length === 1) rest = 0;
     catalog.restaurants.forEach((r, i) => {
@@ -234,18 +251,47 @@
     const d = document.createElement('div');
     d.className = 'row' + (qty[p.code] ? ' sel' : '');
     const st = Number(catalog.stock[p.code] || 0);
-    const low = MODE === 's' && qty[p.code] > st;
+    const low = CHECK_STOCK && qty[p.code] > st;
     d.innerHTML = '<div class="name"><b></b><span class="stock' + (low ? ' low' : '') + '"></span>' +
-      (MODE === 's' ? '<div class="made">📅 сделан: <select></select><span class="per"></span></div>' : '') + '</div>' +
+      (MODE === 's' ? '<div class="made">📅 сделан: <select></select><span class="per"></span></div>' : '') +
+      (MODE === 'b' ? '<div class="made ret">куда: <select class="dst"><option value="0">утилизация</option><option value="1">на склад</option></select>' +
+        '<br>причина: <select class="rsn"></select>' +
+        '<input class="note" type="text" maxlength="80" placeholder="комментарий (необязательно)"></div>' : '') +
+      (MODE === 'w' ? '<div class="made ret">причина: <select class="rsn"></select>' +
+        '<input class="note" type="text" maxlength="80" placeholder="комментарий (необязательно)"></div>' : '') + '</div>' +
       '<div class="qty">' + (grams ? '' : '<button class="m">−</button>') +
       '<input inputmode="numeric" pattern="[0-9]*" class="' + (grams ? 'g' : '') + '" placeholder="' + (grams ? 'грамм' : '0') + '">' +
       (grams ? '<span class="unit">г</span>' : '<button class="p">+</button>') + '</div>';
     d.querySelector('b').textContent = p.name;
     d.querySelector('.stock').textContent = 'на складе: ' + st + ' ' + p.unit + (low ? ' — не хватает' : '');
-    const inp = d.querySelector('input');
+    // Возврат: куда идёт (утилизация по умолчанию) и причина
+    const dst = d.querySelector('.dst'), rsn = d.querySelector('.rsn');
+    const fillReasons = () => {
+      rsn.innerHTML = '';
+      reasonsFor(p.code).forEach((t, i) => { const o = document.createElement('option'); o.value = i; o.textContent = t; rsn.appendChild(o); });
+      rsn.value = reason[p.code] || 0;
+    };
+    if (rsn) {
+      fillReasons();
+      rsn.onchange = () => { const i = Number(rsn.value) || 0; if (i) reason[p.code] = i; else delete reason[p.code]; };
+    }
+    const noteInp = d.querySelector('.note');
+    if (noteInp) {
+      noteInp.value = note[p.code] || '';
+      noteInp.addEventListener('input', () => { const t = noteInp.value.trim(); if (t) note[p.code] = t; else delete note[p.code]; });
+    }
+    if (dst) {
+      dst.value = dest[p.code] ? 1 : 0;
+      dst.onchange = () => {
+        if (dst.value === '1') dest[p.code] = 1; else delete dest[p.code];
+        delete reason[p.code];          // список причин зависит от «куда» — начинаем с первой
+        fillReasons();
+      };
+    }
+    const inp = d.querySelector('.qty input');
     inp.value = qty[p.code] || '';
     // Дата изготовления: по умолчанию сегодня (день отгрузки), можно выбрать более раннюю
-    const sel = d.querySelector('.made select');
+    const sel = MODE === 's' ? d.querySelector('.made select') : null;
     if (sel) {
       for (let a = 0; a <= MAX_AGO; a++) {
         const o = document.createElement('option');
@@ -270,7 +316,7 @@
       if (v) qty[p.code] = v; else delete qty[p.code];
       inp.value = v || '';
       d.classList.toggle('sel', !!v);
-      const lowNow = MODE === 's' && v > st;
+      const lowNow = CHECK_STOCK && v > st;
       const s = d.querySelector('.stock');
       s.classList.toggle('low', lowNow);
       s.textContent = 'на складе: ' + st + ' ' + p.unit + (lowNow ? ' — не хватает' : '');
@@ -285,8 +331,16 @@
 
   $('search').addEventListener('input', renderList);
 
-  // [код, количество] или [код, количество, дней назад сделан]
-  function items() { return Object.keys(qty).map(c => (MODE === 's' && made[c] ? [c, qty[c], made[c]] : [c, qty[c]])); }
+  // приготовлено: [код, кол-во]; отгрузка: [код, кол-во, дней назад сделан];
+  // возврат: [код, кол-во, 1 — на склад / 0 — утилизация, № причины]; списание: [код, кол-во, № причины]
+  function items() {
+    return Object.keys(qty).map(c => {
+      // причина уходит текстом — ровно то, что видел сотрудник; последним необязательный комментарий
+      if (MODE === 'b') return note[c] ? [c, qty[c], dest[c] ? 1 : 0, reasonText(c), note[c]] : [c, qty[c], dest[c] ? 1 : 0, reasonText(c)];
+      if (MODE === 'w') return note[c] ? [c, qty[c], reasonText(c), note[c]] : [c, qty[c], reasonText(c)];
+      return MODE === 's' && made[c] ? [c, qty[c], made[c]] : [c, qty[c]];
+    });
+  }
 
   function updateSummary() {
     updateBadges();
@@ -297,7 +351,7 @@
     catalog.products.forEach(p => { byCode[p.code] = p; });
     const n = it.length;
     let txt = 'Выбрано позиций: ' + n;
-    if (MODE === 's') txt += rest === null ? ' · выберите ресторан ↑' : ' · ' + catalog.restaurants[rest];
+    if (NEEDS_REST) txt += rest === null ? ' · выберите ресторан ↑' : ' · ' + catalog.restaurants[rest];
     $('sumText').textContent = txt;
     box.style.display = 'block';
   }
@@ -307,18 +361,23 @@
   $('saveBtn').onclick = () => {
     const it = items();
     if (!it.length) return;
-    if (MODE === 's' && rest === null) { alertMsg('Выберите ресторан вверху.'); return; }
+    if (NEEDS_REST && rest === null) { alertMsg('Выберите ресторан вверху.'); return; }
     const byCode = {};
     catalog.products.forEach(p => { byCode[p.code] = p; });
-    const lines = it.map(([c, v, ago]) => (byCode[c] ? byCode[c].name : c) + ' — ' + v + ' ' + (byCode[c] ? byCode[c].unit : '') +
-      (ago ? ' (сделан ' + dayText(ago) + ')' : ''));
+    const lines = it.map(([c, v, a, r, n]) => (byCode[c] ? byCode[c].name : c) + ' — ' + v + ' ' + (byCode[c] ? byCode[c].unit : '') +
+      (MODE === 'b' ? ' (' + (a ? 'на склад' : 'утилизация') + ', ' + String(r).toLowerCase() + (n ? ': ' + n : '') + ')'
+       : MODE === 'w' ? ' (' + String(a).toLowerCase() + (r ? ': ' + r : '') + ')'
+       : (a ? ' (сделан ' + dayText(a) + ')' : '')));
     const head = MODE === 's'
       ? 'Отгрузка → ' + catalog.restaurants[rest] + ($('extra').checked ? ' (доп. рейс)' : '')
+      : MODE === 'b' ? 'Возврат ← ' + catalog.restaurants[rest]
+      : MODE === 'w' ? 'Списание'
       : 'Приготовлено';
     const text = head + ':\n' + lines.join('\n');
     const go = () => {
       const payload = { m: MODE, i: it };
-      if (MODE === 's') { payload.r = catalog.restaurants[rest]; payload.x = $('extra').checked ? 1 : 0; }
+      if (NEEDS_REST) payload.r = catalog.restaurants[rest];
+      if (MODE === 's') payload.x = $('extra').checked ? 1 : 0;
       const s = JSON.stringify(payload);
       if (!canSend) { alertMsg('Откройте страницу кнопкой в боте — тогда можно сохранять.'); return; }
       if (s.length > 4000) { alertMsg('Слишком много позиций за раз — разделите на две записи.'); return; }
