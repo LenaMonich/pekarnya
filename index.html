@@ -54,6 +54,8 @@
   .qty input { width: 56px; height: 36px; text-align: center; border-radius: 10px; border: 1px solid var(--line);
     background: var(--bg); color: var(--text); font-size: 16px; }
   .qty input.g { width: 84px; }
+  .qty input.hq { width: 48px; }
+  .qty button.h { width: 32px; font-size: 16px; color: var(--accent); }
   .unit { font-size: 13px; color: var(--hint); width: 14px; }
   .made { display: none; margin-top: 4px; font-size: 13px; color: var(--hint); }
   .row.sel .made { display: block; }
@@ -123,6 +125,7 @@
   const reasonText = code => { const l = reasonsFor(code); return l[reason[code] || 0] || l[0]; };
   const MAX_AGO = 10;
   const pad = n => ('0' + n).slice(-2);
+  const fmt = n => String(Math.round(Number(n) * 100) / 100).replace('.', ',');     // 0.5 → «0,5»
   const dayText = ago => { const d = new Date(Date.now() - ago * 86400000); return pad(d.getDate()) + '.' + pad(d.getMonth() + 1); };
   let rest = null;
 
@@ -248,6 +251,8 @@
 
   function row(p) {
     const grams = p.unit === 'г';
+    // Торты (есть порции) можно отгружать, возвращать и списывать половинками; готовят — целыми
+    const half = !!p.portions && MODE !== 'r' && !grams;
     const d = document.createElement('div');
     d.className = 'row' + (qty[p.code] ? ' sel' : '');
     const st = Number(catalog.stock[p.code] || 0);
@@ -260,10 +265,12 @@
       (MODE === 'w' ? '<div class="made ret">причина: <select class="rsn"></select>' +
         '<input class="note" type="text" maxlength="80" placeholder="комментарий (необязательно)"></div>' : '') + '</div>' +
       '<div class="qty">' + (grams ? '' : '<button class="m">−</button>') +
-      '<input inputmode="numeric" pattern="[0-9]*" class="' + (grams ? 'g' : '') + '" placeholder="' + (grams ? 'грамм' : '0') + '">' +
-      (grams ? '<span class="unit">г</span>' : '<button class="p">+</button>') + '</div>';
+      (half ? '<input inputmode="decimal" class="hq" placeholder="0">'
+            : '<input inputmode="numeric" pattern="[0-9]*" class="' + (grams ? 'g' : '') + '" placeholder="' + (grams ? 'грамм' : '0') + '">') +
+      (grams ? '<span class="unit">г</span>' : '<button class="p">+</button>') +
+      (half ? '<button class="h" title="половина">½</button>' : '') + '</div>';
     d.querySelector('b').textContent = p.name;
-    d.querySelector('.stock').textContent = 'на складе: ' + st + ' ' + p.unit + (low ? ' — не хватает' : '');
+    d.querySelector('.stock').textContent = 'на складе: ' + fmt(st) + ' ' + p.unit + (low ? ' — не хватает' : '');
     // Возврат: куда идёт (утилизация по умолчанию) и причина
     const dst = d.querySelector('.dst'), rsn = d.querySelector('.rsn');
     const fillReasons = () => {
@@ -289,7 +296,7 @@
       };
     }
     const inp = d.querySelector('.qty input');
-    inp.value = qty[p.code] || '';
+    inp.value = qty[p.code] ? fmt(qty[p.code]) : '';
     // Дата изготовления: по умолчанию сегодня (день отгрузки), можно выбрать более раннюю
     const sel = MODE === 's' ? d.querySelector('.made select') : null;
     if (sel) {
@@ -311,21 +318,30 @@
       sel.onchange = () => { const a = Number(sel.value) || 0; if (a) made[p.code] = a; else delete made[p.code]; showPeriod(); };
       showPeriod();
     }
-    const set = v => {
-      v = Math.max(0, Math.min(100000, parseInt(v, 10) || 0));
+    // keepText — не переписывать поле, пока человек печатает («0,» ещё не число)
+    const set = (v, keepText) => {
+      v = half ? Math.round((parseFloat(String(v).replace(',', '.')) || 0) * 2) / 2 : (parseInt(v, 10) || 0);
+      v = Math.max(0, Math.min(100000, v));
       if (v) qty[p.code] = v; else delete qty[p.code];
-      inp.value = v || '';
+      if (!keepText) inp.value = v ? fmt(v) : '';
       d.classList.toggle('sel', !!v);
       const lowNow = CHECK_STOCK && v > st;
       const s = d.querySelector('.stock');
       s.classList.toggle('low', lowNow);
-      s.textContent = 'на складе: ' + st + ' ' + p.unit + (lowNow ? ' — не хватает' : '');
+      s.textContent = 'на складе: ' + fmt(st) + ' ' + p.unit + (lowNow ? ' — не хватает' : '');
       updateSummary();
     };
-    inp.addEventListener('input', () => set(inp.value.replace(/\D/g, '')));
-    const m = d.querySelector('.m'), pl = d.querySelector('.p');
+    if (half) {
+      inp.addEventListener('input', () => set(inp.value.replace(/[^\d.,]/g, ''), true));
+      inp.addEventListener('blur', () => set(qty[p.code] || 0));
+    } else {
+      inp.addEventListener('input', () => set(inp.value.replace(/\D/g, '')));
+    }
+    const m = d.querySelector('.m'), pl = d.querySelector('.p'), hb = d.querySelector('.h');
     if (m) m.onclick = () => { haptic(); set((qty[p.code] || 0) - 1); };
     if (pl) pl.onclick = () => { haptic(); set((qty[p.code] || 0) + 1); };
+    // «½»: добавить половину, а если она уже есть — убрать (1 → 1,5 → 1)
+    if (hb) hb.onclick = () => { haptic(); const c = qty[p.code] || 0; set(Number.isInteger(c) ? c + 0.5 : c - 0.5); };
     return d;
   }
 
@@ -364,7 +380,7 @@
     if (NEEDS_REST && rest === null) { alertMsg('Выберите ресторан вверху.'); return; }
     const byCode = {};
     catalog.products.forEach(p => { byCode[p.code] = p; });
-    const lines = it.map(([c, v, a, r, n]) => (byCode[c] ? byCode[c].name : c) + ' — ' + v + ' ' + (byCode[c] ? byCode[c].unit : '') +
+    const lines = it.map(([c, v, a, r, n]) => (byCode[c] ? byCode[c].name : c) + ' — ' + fmt(v) + ' ' + (byCode[c] ? byCode[c].unit : '') +
       (MODE === 'b' ? ' (' + (a ? 'на склад' : 'утилизация') + ', ' + String(r).toLowerCase() + (n ? ': ' + n : '') + ')'
        : MODE === 'w' ? ' (' + String(a).toLowerCase() + (r ? ': ' + r : '') + ')'
        : (a ? ' (сделан ' + dayText(a) + ')' : '')));
