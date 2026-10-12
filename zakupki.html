@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Закупки</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --bg2: var(--tg-theme-secondary-bg-color, #f2f2f7);
+    --text: var(--tg-theme-text-color, #111111);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --link: var(--tg-theme-link-color, #2b7de9);
+    --btn: var(--tg-theme-button-color, #2b7de9);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --sep: rgba(127,127,127,.18);
+    --ok: #2e9d58;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg2); color: var(--text);
+         font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg2); padding: 10px 12px 8px; }
+  .search { display: flex; gap: 8px; }
+  .search input { flex: 1; border: 0; border-radius: 10px; padding: 9px 12px; font-size: 15px;
+                  background: var(--bg); color: var(--text); outline: none; }
+  .chip { border: 0; border-radius: 10px; padding: 0 12px; background: var(--bg); color: var(--text); font-size: 13px; }
+  .chip.on { background: var(--btn); color: var(--btn-text); }
+  .channel { margin: 14px 16px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--hint); }
+  .sup { background: var(--bg); margin: 0 12px 8px; border-radius: 12px; overflow: hidden; }
+  .sup-h { display: flex; align-items: center; padding: 12px 14px; cursor: pointer; user-select: none; }
+  .sup-h .nm { flex: 1; font-weight: 600; }
+  .freq { font-size: 12px; color: var(--hint); font-weight: 400; margin-top: 2px; }
+  .freq.due { color: #d9480f; font-weight: 600; }
+  .sup-h .nmw { flex: 1; }
+  .badge { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--btn); color: var(--btn-text);
+           font-size: 12px; display: inline-flex; align-items: center; justify-content: center; margin-left: 8px; }
+  .arrow { color: var(--hint); margin-left: 8px; transition: transform .15s; }
+  .sup.open .arrow { transform: rotate(90deg); }
+  .sup-b { display: none; border-top: 1px solid var(--sep); }
+  .sup.open .sup-b { display: block; }
+  .it { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--sep); }
+  .it:last-child { border-bottom: 0; }
+  .it .info { flex: 1; min-width: 0; }
+  .it .n { word-wrap: break-word; }
+  .it .s { font-size: 12px; color: var(--hint); margin-top: 2px; }
+  .it .out { font-size: 12px; color: var(--ok); margin-top: 2px; }
+  .it.on .n { font-weight: 600; }
+  .own { font-size: 11px; color: var(--hint); border: 1px solid var(--sep); border-radius: 6px; padding: 0 4px; margin-left: 4px; }
+  .qty { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .qty button { width: 34px; height: 34px; border-radius: 17px; border: 0; background: var(--bg2); color: var(--text);
+                font-size: 20px; line-height: 1; }
+  .qty button.plus { background: var(--btn); color: var(--btn-text); }
+  .qty input { width: 52px; height: 34px; text-align: center; border: 1px solid var(--sep); border-radius: 8px;
+               background: var(--bg); color: var(--text); font-size: 15px; }
+  .extra { padding: 9px 14px 12px; }
+  .extra .row { display: flex; gap: 6px; margin-top: 6px; }
+  .extra input { flex: 1; border: 1px solid var(--sep); border-radius: 8px; padding: 7px 10px; font-size: 14px;
+                 background: var(--bg); color: var(--text); }
+  .extra button { border: 0; background: none; color: var(--link); font-size: 14px; padding: 4px 0; }
+  .extra .del { color: var(--hint); font-size: 18px; padding: 0 6px; }
+  .msg { padding: 40px 24px; text-align: center; color: var(--hint); }
+  .bottom-space { height: 90px; }
+  #fallbackSave { display: none; position: fixed; left: 12px; right: 12px; bottom: 12px; height: 48px; border: 0;
+                  border-radius: 12px; background: var(--btn); color: var(--btn-text); font-size: 16px; font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <div class="search">
+    <input id="q" type="search" autocomplete="off">
+    <button id="onlyOn" class="chip"></button>
+  </div>
+</header>
+<main id="list"><div class="msg" id="loading"></div></main>
+<div class="bottom-space"></div>
+<button id="fallbackSave"></button>
+
+<script>
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var params = new URLSearchParams(location.search);
+  var lang = params.get('l') === 'es' ? 'es' : 'ru';
+  var api = params.get('api') || '';
+
+  var TXT = {
+    ru: { search: 'Поиск товара', only: 'Отмечено', loading: 'Загрузка…', save: 'Сохранить', saving: 'Сохраняю…',
+          other: '+ Другое (свободной строкой)', otherPh: 'напр. Moldes 20cm 2', last: 'последний раз', step: 'шаг',
+          err: 'Не удалось загрузить. Закройте и откройте снова.', noaccess: 'Нет доступа. Напишите боту /start.',
+          errSave: 'Не удалось сохранить, попробуйте ещё раз.', nothing: 'Ничего не найдено', own: 'своё',
+          via: 'через', week: 'раз в неделю', month: 'раз в месяц', everyN: 'раз в {n} дн.', lastSup: 'посл. заказ', due: 'пора заказать', open: 'Откройте из бота кнопкой «🛒 Закупки».' },
+    es: { search: 'Buscar producto', only: 'Marcado', loading: 'Cargando…', save: 'Guardar', saving: 'Guardando…',
+          other: '+ Otro (texto libre)', otherPh: 'p. ej. Moldes 20cm 2', last: 'última vez', step: 'paso',
+          err: 'No se pudo cargar. Cierra y abre de nuevo.', noaccess: 'Sin acceso. Escribe /start al bot.',
+          errSave: 'No se pudo guardar, inténtalo otra vez.', nothing: 'No hay resultados', own: 'mío',
+          via: 'vía', week: 'cada semana', month: 'cada mes', everyN: 'cada {n} días', lastSup: 'último pedido', due: 'toca pedir', open: 'Ábrelo desde el bot con «🛒 Pedidos».' }
+  }[lang];
+
+  var $ = function (id) { return document.getElementById(id); };
+  $('q').placeholder = TXT.search;
+  $('onlyOn').textContent = TXT.only;
+  $('loading').textContent = TXT.loading;
+  document.title = lang === 'es' ? 'Pedidos' : 'Закупки';
+
+  var data = null, onlyOn = false, openSup = {}, dirty = {};
+
+  function num(v) { var n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? 0 : n; }
+  function fmtNum(n) { n = Math.round(n * 1000) / 1000; return String(n).replace('.', ','); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function line(it, q) {
+    if (it.fmt === 't') return it.name + ' ' + fmtNum(q) + it.pack;
+    if (it.fmt === 'p') {
+      if (!it.pack) return it.name + ' ' + fmtNum(q);
+      return q === 1 ? it.name + ' ' + it.pack : it.name + ' ' + fmtNum(q) + '*' + it.pack;
+    }
+    if (!it.pack && q === 1) return it.name;
+    return it.name + ' ' + fmtNum(q) + (it.pack ? ' ' + it.pack : '');
+  }
+  function lastText(it) {
+    var q = num(it.last.qty);
+    if (!q) return it.last.qty;
+    if (it.fmt === 't') return fmtNum(q) + it.pack;
+    if (it.fmt === 'p' && it.pack) return fmtNum(q) + '*' + it.pack;
+    return fmtNum(q);
+  }
+  function stepText(it) {
+    if (it.fmt === 't') return TXT.step + ' ' + fmtNum(it.step) + it.pack;
+    if (it.fmt === 'p' && it.pack) return '× ' + it.pack + (it.step > 1 ? ' · ' + TXT.step + ' ' + fmtNum(it.step) : '');
+    return (it.pack ? it.pack : '') + (it.step > 1 ? (it.pack ? ' · ' : '') + TXT.step + ' ' + fmtNum(it.step) : '');
+  }
+  function freqHtml(s) {
+    var parts = [];
+    if (s.every) parts.push(s.every === 7 ? TXT.week : s.every === 30 ? TXT.month : TXT.everyN.replace('{n}', s.every));
+    if (s.lastDate) parts.push(TXT.lastSup + ' ' + s.lastDate);
+    var due = s.every && (s.daysAgo == null || s.daysAgo >= s.every);
+    if (due && s.lastDate) parts.push(TXT.due);
+    return parts.length ? '<div class="freq' + (due && s.lastDate ? ' due' : '') + '">' + esc(parts.join(' · ')) + '</div>' : '';
+  }
+  function countOn(s) { return s.items.filter(function (i) { return i.qty > 0; }).length + s.extra.filter(function (t) { return t.trim(); }).length; }
+  function total() { return data ? data.suppliers.reduce(function (a, s) { return a + countOn(s); }, 0) : 0; }
+
+  function render() {
+    var q = $('q').value.trim().toLowerCase();
+    var html = '', lastCh = null, shown = 0;
+    data.suppliers.forEach(function (s, si) {
+      var items = s.items.filter(function (it) {
+        if (onlyOn && !(it.qty > 0)) return false;
+        return !q || it.name.toLowerCase().indexOf(q) >= 0 || s.name.toLowerCase().indexOf(q) >= 0;
+      });
+      var showExtra = !onlyOn || s.extra.some(function (t) { return t.trim(); });
+      if (!items.length && (q || onlyOn) && !(onlyOn && showExtra && !q)) return;
+      shown++;
+      if (data.admin && s.channel !== lastCh) {
+        html += '<div class="channel">' + esc(TXT.via + ' ' + s.channel) + '</div>';
+        lastCh = s.channel;
+      }
+      var open = openSup[s.name] || !!q || onlyOn;
+      var c = countOn(s);
+      html += '<div class="sup' + (open ? ' open' : '') + '" data-s="' + si + '">' +
+        '<div class="sup-h"><div class="nmw"><div class="nm">' + esc(s.name) + '</div>' + freqHtml(s) + '</div>' +
+        (c ? '<span class="badge">' + c + '</span>' : '') + '<span class="arrow">›</span></div><div class="sup-b">';
+      items.forEach(function (it) {
+        var ii = s.items.indexOf(it);
+        var on = it.qty > 0;
+        var sub = stepText(it);
+        if (it.last) sub += (sub ? ' · ' : '') + TXT.last + ': ' + lastText(it) + ' (' + it.last.date + ')';
+        html += '<div class="it' + (on ? ' on' : '') + '" data-s="' + si + '" data-i="' + ii + '">' +
+          '<div class="info"><div class="n">' + esc(it.name) + (it.own ? '<span class="own">' + TXT.own + '</span>' : '') + '</div>' +
+          (sub ? '<div class="s">' + esc(sub) + '</div>' : '') +
+          (on ? '<div class="out">→ ' + esc(line(it, it.qty)) + '</div>' : '') + '</div>' +
+          '<div class="qty"><button class="minus" data-a="-">−</button>' +
+          '<input inputmode="decimal" value="' + (on ? fmtNum(it.qty) : '') + '" placeholder="0">' +
+          '<button class="plus" data-a="+">+</button></div></div>';
+      });
+      if (showExtra && !q) {
+        html += '<div class="extra" data-s="' + si + '">';
+        s.extra.forEach(function (t, ei) {
+          html += '<div class="row"><input data-e="' + ei + '" value="' + esc(t) + '" placeholder="' + esc(TXT.otherPh) + '">' +
+                  '<button class="del" data-e="' + ei + '">×</button></div>';
+        });
+        if (!onlyOn) html += '<button class="addx">' + esc(TXT.other) + '</button>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+    });
+    if (!shown) html = '<div class="msg">' + esc(TXT.nothing) + '</div>';
+    $('list').innerHTML = html;
+    updateButton();
+  }
+
+  function updateButton() {
+    var n = total();
+    var label = TXT.save + (n ? ' (' + n + ')' : '');
+    if (tg && tg.MainButton && tg.initData) {
+      tg.MainButton.setText(label);
+      tg.MainButton.show();
+    } else {
+      $('fallbackSave').textContent = label;
+      $('fallbackSave').style.display = 'block';
+    }
+  }
+
+  function setQty(si, ii, q) {
+    var s = data.suppliers[si], it = s.items[ii];
+    q = Math.max(0, Math.round(q * 1000) / 1000);
+    it.qty = q;
+    dirty[s.name] = 1;
+    var row = document.querySelector('.it[data-s="' + si + '"][data-i="' + ii + '"]');
+    if (!row) return render();
+    row.classList.toggle('on', q > 0);
+    row.querySelector('input').value = q > 0 ? fmtNum(q) : '';
+    var out = row.querySelector('.out');
+    if (q > 0) {
+      if (!out) { out = document.createElement('div'); out.className = 'out'; row.querySelector('.info').appendChild(out); }
+      out.textContent = '→ ' + line(it, q);
+    } else if (out) out.remove();
+    var card = document.querySelector('.sup[data-s="' + si + '"] .sup-h');
+    var b = card.querySelector('.badge'), c = countOn(s);
+    if (c) { if (!b) { b = document.createElement('span'); b.className = 'badge'; card.insertBefore(b, card.querySelector('.arrow')); } b.textContent = c; }
+    else if (b) b.remove();
+    updateButton();
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+  }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var head = t.closest('.sup-h');
+    if (head) {
+      var card = head.parentNode, s = data.suppliers[+card.dataset.s];
+      openSup[s.name] = !card.classList.contains('open');
+      card.classList.toggle('open');
+      return;
+    }
+    if (t.dataset.a) {
+      var row = t.closest('.it'), si = +row.dataset.s, ii = +row.dataset.i;
+      var it = data.suppliers[si].items[ii];
+      setQty(si, ii, it.qty + (t.dataset.a === '+' ? 1 : -1) * (it.step || 1));
+      return;
+    }
+    if (t.classList.contains('addx')) {
+      var ex = t.closest('.extra'), sx = data.suppliers[+ex.dataset.s];
+      sx.extra.push(''); dirty[sx.name] = 1; openSup[sx.name] = true;
+      render();
+      var ins = document.querySelectorAll('.extra[data-s="' + ex.dataset.s + '"] input');
+      if (ins.length) ins[ins.length - 1].focus();
+      return;
+    }
+    if (t.classList.contains('del')) {
+      var ex2 = t.closest('.extra'), s2 = data.suppliers[+ex2.dataset.s];
+      s2.extra.splice(+t.dataset.e, 1); dirty[s2.name] = 1;
+      render();
+    }
+  });
+  document.addEventListener('change', function (e) {
+    var t = e.target, row = t.closest('.it');
+    if (row) { setQty(+row.dataset.s, +row.dataset.i, num(t.value)); return; }
+    var ex = t.closest('.extra');
+    if (ex && t.dataset.e != null) {
+      var s = data.suppliers[+ex.dataset.s];
+      s.extra[+t.dataset.e] = t.value; dirty[s.name] = 1;
+      render();
+    }
+  });
+  document.addEventListener('input', function (e) {
+    var t = e.target, ex = t.closest('.extra');
+    if (ex && t.dataset.e != null) { var s = data.suppliers[+ex.dataset.s]; s.extra[+t.dataset.e] = t.value; dirty[s.name] = 1; }
+  });
+  $('q').addEventListener('input', render);
+  $('onlyOn').addEventListener('click', function () { onlyOn = !onlyOn; this.classList.toggle('on', onlyOn); render(); });
+
+  var saving = false;
+  function save() {
+    if (saving || !data) return;
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    saving = true;
+    if (tg && tg.MainButton) { tg.MainButton.setText(TXT.saving); tg.MainButton.showProgress(); }
+    var items = [], extra = [];
+    data.suppliers.forEach(function (s) {
+      s.items.forEach(function (it) { items.push({ id: it.id, qty: it.qty }); });
+      s.extra.forEach(function (t) { if (t.trim()) extra.push({ sup: s.name, text: t.trim() }); });
+    });
+    fetch(api, { method: 'POST', body: JSON.stringify({
+      action: 'save', initData: tg.initData, items: items, extra: extra, sups: Object.keys(dirty)
+    }) }).then(function (r) { return r.json(); }).then(function (r) {
+      if (!r.ok) throw new Error(r.error || 'save');
+      tg.close();
+    }).catch(function () {
+      saving = false;
+      if (tg.MainButton) tg.MainButton.hideProgress();
+      updateButton();
+      tg.showAlert ? tg.showAlert(TXT.errSave) : alert(TXT.errSave);
+    });
+  }
+
+  function load() {
+    if (!tg || !tg.initData || !api) { $('loading').textContent = TXT.open; return; }
+    tg.ready(); tg.expand();
+    if (tg.MainButton) tg.MainButton.onClick(save);
+    $('fallbackSave').onclick = save;
+    fetch(api + (api.indexOf('?') < 0 ? '?' : '&') + 'action=catalog&initData=' + encodeURIComponent(tg.initData))
+      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) { $('loading').textContent = r.error === 'noaccess' ? TXT.noaccess : TXT.err; return; }
+        data = r;
+        data.suppliers.forEach(function (s) {
+          s.items.forEach(function (it) { it.qty = num(it.qty); it.step = num(it.step) || 1; });
+          if (countOn(s)) openSup[s.name] = false;
+        });
+        render();
+      })
+      .catch(function () { $('loading').textContent = TXT.err; });
+  }
+  load();
+})();
+</script>
+</body>
+</html>
