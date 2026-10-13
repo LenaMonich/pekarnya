@@ -46,6 +46,8 @@
   .it .s { font-size: 12px; color: var(--hint); margin-top: 2px; }
   .it .out { font-size: 12px; color: var(--ok); margin-top: 2px; }
   .it.on .n { font-weight: 600; }
+  .it.other { background: rgba(255,170,0,.08); box-shadow: inset 3px 0 0 #f0a020; }
+  .own.other { color: #c77d00; border-color: rgba(240,160,32,.5); }
   .own { font-size: 11px; color: var(--hint); border: 1px solid var(--sep); border-radius: 6px; padding: 0 4px; margin-left: 4px; }
   .qty { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
   .qty button { width: 34px; height: 34px; border-radius: 17px; border: 0; background: var(--bg2); color: var(--text);
@@ -164,8 +166,8 @@
         var on = it.qty > 0;
         var sub = stepText(it);
         if (it.last) sub += (sub ? ' · ' : '') + TXT.last + ': ' + lastText(it) + ' (' + it.last.date + ')';
-        html += '<div class="it' + (on ? ' on' : '') + '" data-s="' + si + '" data-i="' + ii + '">' +
-          '<div class="info"><div class="n">' + esc(it.name) + (it.own ? '<span class="own">' + TXT.own + '</span>' : '') + '</div>' +
+        html += '<div class="it' + (on ? ' on' : '') + (it.owner && data.admin ? ' other' : '') + '" data-s="' + si + '" data-i="' + ii + '">' +
+          '<div class="info"><div class="n">' + esc(it.name) + (it.owner ? '<span class="own' + (data.admin ? ' other' : '') + '">' + esc(data.admin ? it.owner : TXT.own) + '</span>' : '') + '</div>' +
           (sub ? '<div class="s">' + esc(sub) + '</div>' : '') +
           (on ? '<div class="out">→ ' + esc(line(it, it.qty)) + '</div>' : '') + '</div>' +
           '<div class="qty"><button class="minus" data-a="-">−</button>' +
