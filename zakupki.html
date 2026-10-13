@@ -48,6 +48,8 @@
   .it.on .n { font-weight: 600; }
   .it.other { background: rgba(255,170,0,.08); box-shadow: inset 3px 0 0 #f0a020; }
   .own.other { color: #c77d00; border-color: rgba(240,160,32,.5); }
+  .it.lena { background: rgba(140,90,255,.09); box-shadow: inset 3px 0 0 #8c5aff; }
+  .own.lena { color: #8c5aff; border-color: rgba(140,90,255,.5); }
   .own { font-size: 11px; color: var(--hint); border: 1px solid var(--sep); border-radius: 6px; padding: 0 4px; margin-left: 4px; }
   .qty { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
   .qty button { width: 34px; height: 34px; border-radius: 17px; border: 0; background: var(--bg2); color: var(--text);
@@ -138,6 +140,15 @@
     if (due && s.lastDate) parts.push(TXT.due);
     return parts.length ? '<div class="freq' + (due && s.lastDate ? ' due' : '') + '">' + esc(parts.join(' · ')) + '</div>' : '';
   }
+  // Лена видит позиции Andreas оранжевыми, Andreas видит позиции Лены фиолетовыми.
+  function markClass(it) {
+    if (data.admin) return it.owner ? ' other' : '';
+    return it.owner ? '' : ' lena';
+  }
+  function markHtml(it) {
+    if (data.admin) return it.owner ? '<span class="own other">' + esc(it.owner) + '</span>' : '';
+    return it.owner ? '' : '<span class="own lena">' + esc(data.adminName || 'Lena') + '</span>';
+  }
   function countOn(s) { return s.items.filter(function (i) { return i.qty > 0; }).length + s.extra.filter(function (t) { return t.trim(); }).length; }
   function total() { return data ? data.suppliers.reduce(function (a, s) { return a + countOn(s); }, 0) : 0; }
 
@@ -166,8 +177,8 @@
         var on = it.qty > 0;
         var sub = stepText(it);
         if (it.last) sub += (sub ? ' · ' : '') + TXT.last + ': ' + lastText(it) + ' (' + it.last.date + ')';
-        html += '<div class="it' + (on ? ' on' : '') + (it.owner && data.admin ? ' other' : '') + '" data-s="' + si + '" data-i="' + ii + '">' +
-          '<div class="info"><div class="n">' + esc(it.name) + (it.owner ? '<span class="own' + (data.admin ? ' other' : '') + '">' + esc(data.admin ? it.owner : TXT.own) + '</span>' : '') + '</div>' +
+        html += '<div class="it' + (on ? ' on' : '') + markClass(it) + '" data-s="' + si + '" data-i="' + ii + '">' +
+          '<div class="info"><div class="n">' + esc(it.name) + markHtml(it) + '</div>' +
           (sub ? '<div class="s">' + esc(sub) + '</div>' : '') +
           (on ? '<div class="out">→ ' + esc(line(it, it.qty)) + '</div>' : '') + '</div>' +
           '<div class="qty"><button class="minus" data-a="-">−</button>' +
