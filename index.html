@@ -25,6 +25,10 @@
   .chip { border: 1px solid var(--line); background: var(--bg); color: var(--text);
     border-radius: 18px; padding: 7px 14px; font-size: 15px; }
   .chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .chip.b2b { border-style: dashed; }
+  .chips .lbl { align-self: center; font-size: 12px; color: var(--hint); margin-left: 4px; }
+  .chips select { font-size: 15px; padding: 7px 10px; border-radius: 18px; border: 1px solid var(--accent);
+    background: var(--bg); color: var(--text); max-width: 100%; }
   .extra { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 8px; }
   .extra input { width: 20px; height: 20px; accent-color: var(--accent); }
   #search { width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line);
@@ -141,6 +145,7 @@
   const fmt = n => String(Math.round(Number(n) * 100) / 100).replace('.', ',');     // 0.5 → «0,5»
   const dayText = ago => { const d = new Date(Date.now() - ago * 86400000); return pad(d.getDate()) + '.' + pad(d.getMonth() + 1); };
   let rest = null;
+  let b2bOpen = false;         // выбран чип «B2B» (клиент — из списка)
 
   const $ = id => document.getElementById(id);
   $('title').textContent = MODE === 's' ? L('🚚 Отгрузка', '🚚 Envío') : MODE === 'b' ? L('↩️ Возврат от ресторана', '↩️ Devolución del restaurante')
@@ -178,6 +183,8 @@
   // ПФ (сырые полуфабрикаты) не отгружают и не возвращают — в этих списках их нет
   function prep(d) {
     if ((MODE === 's' || MODE === 'b') && d.pfCat) d.products = d.products.filter(p => p.cat !== d.pfCat);
+    // полки заморозки (Lino ❄️) — только перемещением в боте и списанием; здесь их нет
+    if (MODE !== 'w') d.products = d.products.filter(p => !p.fz);
     // «Приготовлено» и «Отгрузка»: кондитер и пекари видят только своё (админ — всё)
     const role = VIEW === 'b' ? 'b1' : VIEW;
     if (MODE === 'r' && ['c', 'b1', 'b2'].indexOf(role) >= 0) d.products = d.products.filter(p => !p.mk || p.mk.indexOf(role) >= 0);
@@ -210,16 +217,43 @@
   function renderRestaurants() {
     const box = $('rests');
     box.style.display = 'flex';
-    if (MODE === 's') $('extraBox').style.display = 'flex';
+    const b2b = catalog.b2b || [];
+    const isB2B = i => i !== null && b2b.indexOf(catalog.restaurants[i]) >= 0;
+    // доп. рейс — только для наших ресторанов (у B2B нет бланка)
+    $('extraBox').style.display = MODE === 's' && !isB2B(rest) ? 'flex' : 'none';
+    if (isB2B(rest)) $('extra').checked = false;
     box.innerHTML = '';
     if (rest === null && catalog.restaurants.length === 1) rest = 0;
+    const pick = i => { rest = i; haptic(); renderRestaurants(); dropNotFor(); renderList(); updateSummary(); };
+    // наши рестораны — чипами
     catalog.restaurants.forEach((r, i) => {
+      if (isB2B(i)) return;
       const b = document.createElement('button');
       b.className = 'chip' + (rest === i ? ' on' : '');
       b.textContent = r;
-      b.onclick = () => { rest = i; haptic(); renderRestaurants(); updateSummary(); };
+      b.onclick = () => { b2bOpen = false; pick(i); };
       box.appendChild(b);
     });
+    // B2B — один чип, а клиент выбирается из списка (для аналитики по клиентам)
+    if (b2b.length) {
+      const on = b2bOpen || isB2B(rest);
+      const b = document.createElement('button');
+      b.className = 'chip b2b' + (on ? ' on' : '');
+      b.textContent = 'B2B';
+      b.onclick = () => { b2bOpen = true; if (!isB2B(rest)) rest = null; haptic(); renderRestaurants(); dropNotFor(); renderList(); updateSummary(); };
+      box.appendChild(b);
+      if (on) {
+        const sel = document.createElement('select');
+        const o0 = document.createElement('option'); o0.value = ''; o0.textContent = L('— клиент —', '— cliente —'); sel.appendChild(o0);
+        catalog.restaurants.forEach((r, i) => {
+          if (!isB2B(i)) return;
+          const o = document.createElement('option'); o.value = i; o.textContent = r; sel.appendChild(o);
+        });
+        sel.value = isB2B(rest) ? String(rest) : '';
+        sel.onchange = () => { pick(sel.value === '' ? null : Number(sel.value)); };
+        box.appendChild(sel);
+      }
+    }
   }
 
   // Настройки вида: из бота (catalog.views), иначе встроенные
@@ -250,7 +284,7 @@
       if (v) v.closed.forEach(c => { collapsed[c] = true; });
     }
     orderedCats().forEach(cat => {
-      const prods = catalog.products.filter(p => p.cat === cat && (!filter || p.name.toLowerCase().indexOf(filter) >= 0));
+      const prods = catalog.products.filter(p => p.cat === cat && fitsRest(p) && (!filter || p.name.toLowerCase().indexOf(filter) >= 0));
       if (!prods.length) return;
       const isClosed = !filter && !!collapsed[cat];   // при поиске всё раскрыто
 
@@ -411,6 +445,17 @@
 
   // приготовлено: [код, кол-во]; отгрузка: [код, кол-во, дней назад сделан];
   // возврат: [код, кол-во, 1 — на склад / 0 — утилизация, № причины]; списание: [код, кол-во, № причины]
+  // «Кому»: продукт только для наших ресторанов ('rest') или только для B2B ('b2b')
+  function fitsRest(p) {
+    if (MODE !== 's' || rest === null || !p.to) return true;
+    const b2b = (catalog.b2b || []).indexOf(catalog.restaurants[rest]) >= 0;
+    return p.to === (b2b ? 'b2b' : 'rest');
+  }
+  // сменили получателя — убираем то, что ему не отправляют
+  function dropNotFor() {
+    catalog.products.forEach(p => { if (qty[p.code] && !fitsRest(p)) { delete qty[p.code]; delete made[p.code]; } });
+  }
+
   function items() {
     return Object.keys(qty).map(c => {
       // причина уходит текстом — ровно то, что видел сотрудник; последним необязательный комментарий
@@ -429,7 +474,8 @@
     catalog.products.forEach(p => { byCode[p.code] = p; });
     const n = it.length;
     let txt = L('Выбрано позиций: ', 'Productos elegidos: ') + n;
-    if (NEEDS_REST) txt += rest === null ? L(' · выберите ресторан ↑', ' · elige restaurante ↑') : ' · ' + catalog.restaurants[rest];
+    if (NEEDS_REST) txt += rest === null ? (b2bOpen ? L(' · выберите клиента B2B ↑', ' · elige cliente B2B ↑') : L(' · выберите ресторан ↑', ' · elige restaurante ↑'))
+                                         : ' · ' + ((catalog.b2b || []).indexOf(catalog.restaurants[rest]) >= 0 ? 'B2B ' : '') + catalog.restaurants[rest];
     $('sumText').textContent = txt;
     box.style.display = 'block';
   }
@@ -439,7 +485,7 @@
   $('saveBtn').onclick = () => {
     const it = items();
     if (!it.length) return;
-    if (NEEDS_REST && rest === null) { alertMsg(L('Выберите ресторан вверху.', 'Elige el restaurante arriba.')); return; }
+    if (NEEDS_REST && rest === null) { alertMsg(b2bOpen ? L('Выберите клиента B2B вверху.', 'Elige el cliente B2B arriba.') : L('Выберите ресторан вверху.', 'Elige el restaurante arriba.')); return; }
     const byCode = {};
     catalog.products.forEach(p => { byCode[p.code] = p; });
     const lines = it.map(([c, v, a, r, n]) => (byCode[c] ? byCode[c].name : c) + ' — ' + fmt(v) + ' ' + (byCode[c] ? uLabel(byCode[c].unit) : '') +
