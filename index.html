@@ -81,6 +81,7 @@
   <h1 id="title">…</h1>
   <div id="rests" class="chips" style="display:none"></div>
   <label id="extraBox" class="extra" style="display:none"><input type="checkbox" id="extra"> <span id="extraTxt">⚡ Доп. рейс сегодня (бланк придёт сразу)</span></label>
+  <label id="openBox" class="extra" style="display:none"><input type="checkbox" id="opening"> <span id="openTxt">📦 Начальный остаток (не в Producción, ПФ не списывается)</span></label>
   <input id="search" type="search" placeholder="Поиск продукта">
   <div id="nav" class="nav"></div>
 </header>
@@ -148,6 +149,7 @@
     document.documentElement.lang = 'es';
     document.title = 'Obrador';
     $('extraTxt').textContent = '⚡ Viaje extra hoy (el albarán llega al momento)';
+    $('openTxt').textContent = '📦 Stock inicial (no entra en Producción, no descuenta PF)';
     $('search').placeholder = 'Buscar producto';
     $('msg').textContent = 'Cargando…';
     $('saveBtn').textContent = 'Guardar';
@@ -198,6 +200,8 @@
   function render() {
     if (!catalog) return;
     $('msg').style.display = 'none';
+    // админ в «Приготовлено» может внести начальный остаток (например, ПФ, которые уже лежат на складе)
+    if (MODE === 'r' && VIEW === 'a') $('openBox').style.display = 'flex';
     if (NEEDS_REST) renderRestaurants();
     renderList();
     updateSummary();
@@ -446,12 +450,13 @@
       ? L('Отгрузка → ', 'Envío → ') + catalog.restaurants[rest] + ($('extra').checked ? L(' (доп. рейс)', ' (viaje extra)') : '')
       : MODE === 'b' ? L('Возврат ← ', 'Devolución ← ') + catalog.restaurants[rest]
       : MODE === 'w' ? L('Списание', 'Desechar')
-      : L('Приготовлено', 'Elaborado');
+      : $('opening').checked ? L('Начальный остаток', 'Stock inicial') : L('Приготовлено', 'Elaborado');
     const text = head + ':\n' + lines.join('\n');
     const go = () => {
       const payload = { m: MODE, i: it };
       if (NEEDS_REST) payload.r = catalog.restaurants[rest];
       if (MODE === 's') payload.x = $('extra').checked ? 1 : 0;
+      if (MODE === 'r' && $('opening').checked) payload.o = 1;
       const s = JSON.stringify(payload);
       if (!canSend) { alertMsg(L('Откройте страницу кнопкой в боте — тогда можно сохранять.', 'Abre la página con el botón del bot para poder guardar.')); return; }
       if (s.length > 4000) { alertMsg(L('Слишком много позиций за раз — разделите на две записи.', 'Demasiados productos a la vez: divídelo en dos registros.')); return; }
