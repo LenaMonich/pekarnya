@@ -54,9 +54,13 @@
   .stock.low { color: var(--warn); font-weight: 600; }
   .pf { display: block; font-size: 12px; color: var(--hint); }
   .pf.low { color: var(--warn); font-weight: 600; }
-  .fzr input { width: 64px; font-size: 15px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line);
-    background: var(--bg); color: var(--text); text-align: center; margin-left: 4px; }
-  .fzr.low { color: var(--warn); font-weight: 600; }
+  /* хлеб со свежим и заморозкой: две строки, у каждой свои − [ ] + */
+  .row.fzrow { display: block; }
+  .fzrow .fzname b { font-weight: 500; }
+  .fzrow .fzname .per { display: block; font-size: 12px; color: var(--hint); }
+  .fzline { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .fzline .lbl { flex: 1; font-size: 13px; color: var(--hint); }
+  .fzline .lbl.low { color: var(--warn); font-weight: 600; }
   .qty { display: flex; align-items: center; gap: 4px; }
   .qty button { width: 36px; height: 36px; border-radius: 10px; border: none; font-size: 20px;
     background: var(--bg2); color: var(--text); }
@@ -332,11 +336,13 @@
   function updateBadges() {
     if (!catalog) return;
     const n = {};
-    catalog.products.forEach(p => { if (qty[p.code]) n[p.cat] = (n[p.cat] || 0) + 1; });
+    catalog.products.forEach(p => { if (qty[p.code] || fzq[p.code]) n[p.cat] = (n[p.cat] || 0) + 1; });
     Object.keys(badges).forEach(c => { badges[c].textContent = n[c] ? L('выбрано: ', 'elegidos: ') + n[c] : ''; });
   }
 
   function row(p) {
+    const shelf0 = shelfFor(p.code);
+    if (shelf0) return rowFz(p, shelf0);
     const grams = p.unit === 'г';
     // Торты (есть порции) можно отгружать, возвращать и списывать половинками; готовят — целыми
     const half = !!p.portions && MODE !== 'r' && !grams;
@@ -347,7 +353,6 @@
     const src = MODE === 'r' && p.from ? catalog.products.filter(x => x.code === p.from)[0] : null;
     d.innerHTML = '<div class="name"><b></b><span class="stock' + (low ? ' low' : '') + '"></span>' +
       (src ? '<span class="pf"></span>' : '') +
-      (shelfFor(p.code) ? '<div class="made fzr"></div>' : '') +
       (MODE === 's' ? '<div class="made">' + L('📅 сделан: ', '📅 hecho: ') + '<select></select><span class="per"></span></div>' : '') +
       (MODE === 'b' ? '<div class="made ret">' + L('куда: ', 'destino: ') + '<select class="dst"><option value="0">' + L('утилизация', 'desechar') +
         '</option><option value="1">' + L('на склад', 'al almacén') + '</option></select>' +
@@ -420,23 +425,6 @@
       sel.onchange = () => { const a = Number(sel.value) || 0; if (a) made[p.code] = a; else delete made[p.code]; showPeriod(); };
       showPeriod();
     }
-    // отгрузка хлеба частично из заморозки: «❄️ из заморозки (B2B, есть 5): [ ]»
-    const shelf = shelfFor(p.code), fzBox = d.querySelector('.fzr');
-    if (shelf && fzBox) {
-      const have = Number(catalog.stock[shelf.code] || 0);
-      const lbl = shelf.name.replace(p.name, '').replace(/❄️|congelado/gi, '').trim();
-      fzBox.innerHTML = '❄️ ' + L('из заморозки', 'del congelador') + ' (' + lbl + ', ' + L('есть ', 'hay ') + fmt(have) + '): <input inputmode="numeric" placeholder="0">';
-      const fi = fzBox.querySelector('input');
-      fi.value = fzq[p.code] || '';
-      fi.addEventListener('input', () => {
-        const v = Math.min(100000, parseInt(fi.value.replace(/\D/g, ''), 10) || 0);
-        if (v) fzq[p.code] = v; else delete fzq[p.code];
-        fzBox.classList.toggle('low', v > have);
-        d.classList.toggle('sel', !!(v || qty[p.code]));
-        updateSummary();
-      });
-      fzBox.classList.toggle('low', (fzq[p.code] || 0) > have);
-    }
     // keepText — не переписывать поле, пока человек печатает («0,» ещё не число)
     const set = (v, keepText) => {
       v = half ? Math.round((parseFloat(String(v).replace(',', '.')) || 0) * 2) / 2 : (parseInt(v, 10) || 0);
@@ -462,6 +450,44 @@
     if (pl) pl.onclick = () => { haptic(); set((qty[p.code] || 0) + 1); };
     // «½»: добавить половину, а если она уже есть — убрать (1 → 1,5 → 1)
     if (hb) hb.onclick = () => { haptic(); const c = qty[p.code] || 0; set(Number.isInteger(c) ? c + 0.5 : c - 0.5); };
+    return d;
+  }
+
+  // Отгрузка хлеба, у которого есть заморозка: две строки — свежий и из заморозки (полка получателя).
+  // Записывается всё одной строкой «Pan de Lino 900gr», дата одна — день отгрузки.
+  function rowFz(p, shelf) {
+    const d = document.createElement('div');
+    d.className = 'row fzrow';
+    const st = Number(catalog.stock[p.code] || 0), have = Number(catalog.stock[shelf.code] || 0);
+    const lbl = shelf.name.replace(p.name, '').replace(/❄️|congelado/gi, '').trim();
+    const line = cls => '<div class="fzline ' + cls + '"><span class="lbl"></span><div class="qty"><button class="m">−</button>' +
+      '<input inputmode="numeric" pattern="[0-9]*" placeholder="0"><button class="p">+</button></div></div>';
+    d.innerHTML = '<div class="fzname"><b></b><span class="per"></span></div>' + line('fr') + line('fz');
+    d.querySelector('b').textContent = p.name;
+    delete made[p.code];                                  // дата одна — сегодня
+    if (p.days !== null && p.days !== undefined) d.querySelector('.per').textContent = L('срок ', 'caduca ') + dayText(0) + '–' + dayText(-p.days);
+    const bind = (cls, store, avail, text) => {
+      const box = d.querySelector('.fzline.' + cls), inp = box.querySelector('input'), lb = box.querySelector('.lbl');
+      const show = () => {
+        const v = store[p.code] || 0;
+        lb.textContent = text + ' · ' + L('есть ', 'hay ') + fmt(avail) + (v > avail ? L(' — не хватает', ' — no alcanza') : '');
+        lb.classList.toggle('low', v > avail);
+        d.classList.toggle('sel', !!(qty[p.code] || fzq[p.code]));
+      };
+      const set = (v, keep) => {
+        v = Math.max(0, Math.min(100000, parseInt(v, 10) || 0));
+        if (v) store[p.code] = v; else delete store[p.code];
+        if (!keep) inp.value = v ? fmt(v) : '';
+        show(); updateSummary();
+      };
+      inp.value = store[p.code] ? fmt(store[p.code]) : '';
+      inp.addEventListener('input', () => set(inp.value.replace(/\D/g, ''), true));
+      box.querySelector('.m').onclick = () => { haptic(); set((store[p.code] || 0) - 1); };
+      box.querySelector('.p').onclick = () => { haptic(); set((store[p.code] || 0) + 1); };
+      show();
+    };
+    bind('fr', qty, st, L('🍞 свежий', '🍞 fresco'));
+    bind('fz', fzq, have, L('❄️ из заморозки (', '❄️ del congelador (') + lbl + ')');
     return d;
   }
 
