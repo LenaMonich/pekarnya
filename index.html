@@ -48,6 +48,8 @@
   .name b { font-weight: 500; display: block; }
   .stock { font-size: 12px; color: var(--hint); }
   .stock.low { color: var(--warn); font-weight: 600; }
+  .pf { display: block; font-size: 12px; color: var(--hint); }
+  .pf.low { color: var(--warn); font-weight: 600; }
   .qty { display: flex; align-items: center; gap: 4px; }
   .qty button { width: 36px; height: 36px; border-radius: 10px; border: none; font-size: 20px;
     background: var(--bg2); color: var(--text); }
@@ -117,7 +119,8 @@
   const COLLAPSE_KEY = 'pek_collapsed_v2_' + MODE + '_' + VIEW;
   let collapsed = null;        // {категория: true} — что свёрнуто; запоминается на этом телефоне
   try { const c = localStorage.getItem(COLLAPSE_KEY); if (c) collapsed = JSON.parse(c); } catch (e) {}
-  const badges = {};           // категория -> элемент со счётчиком выбранного
+  const badges = {};
+  const pfHints = [];          // обновление подсказок «из ПФ …» (только «Приготовлено»)           // категория -> элемент со счётчиком выбранного
 
   let catalog = null;          // {products:[{code,name,cat,unit}], restaurants:[], stock:{}}
   const qty = {};              // code -> число
@@ -155,20 +158,42 @@
   const canSend = !!(tg && tg.sendData && tg.platform && tg.platform !== 'unknown');
 
   // 1) показываем сохранённый справочник сразу (мгновенно), 2) обновляем с сервера
-  try { const c = localStorage.getItem(CACHE); if (c) { catalog = JSON.parse(c); render(); } } catch (e) {}
+  try { const c = localStorage.getItem(CACHE); if (c) { catalog = prep(JSON.parse(c)); render(); } } catch (e) {}
   if (API) {
     fetch(API + (API.indexOf('?') >= 0 ? '&' : '?') + 'a=catalog&k=' + encodeURIComponent(KEY), { redirect: 'follow' })
       .then(r => r.json())
       .then(d => {
         if (!d || !d.products) throw new Error(d && d.error || L('нет данных', 'sin datos'));
-        catalog = d;
         try { localStorage.setItem(CACHE, JSON.stringify(d)); } catch (e) {}
+        catalog = prep(d);
         render();
       })
       .catch(err => { if (!catalog) $('msg').textContent = L('Не удалось загрузить список продуктов: ', 'No se pudo cargar la lista de productos: ') + err.message; });
   } else if (!catalog) {
     $('msg').textContent = L('Откройте эту страницу кнопкой в боте.', 'Abre esta página con el botón del bot.');
   }
+
+  // ПФ (сырые полуфабрикаты) не отгружают и не возвращают — в этих списках их нет
+  function prep(d) {
+    if ((MODE === 's' || MODE === 'b') && d.pfCat) d.products = d.products.filter(p => p.cat !== d.pfCat);
+    // «Приготовлено» и «Отгрузка»: кондитер и пекари видят только своё (админ — всё)
+    const role = VIEW === 'b' ? 'b1' : VIEW;
+    if (MODE === 'r' && ['c', 'b1', 'b2'].indexOf(role) >= 0) d.products = d.products.filter(p => !p.mk || p.mk.indexOf(role) >= 0);
+    // «Отгрузка»: пекарь 1 отгружает и готовое пекаря 2 (из бота: shipFor)
+    if (MODE === 's' && ['c', 'b1', 'b2'].indexOf(role) >= 0) {
+      const can = (d.shipFor && d.shipFor[role]) || [role];
+      d.products = d.products.filter(p => !p.mk || p.mk.some(x => can.indexOf(x) >= 0));
+    }
+    return d;
+  }
+
+  // «Приготовлено»: у готового из ПФ видно, сколько ПФ на складе; все изделия из одного ПФ считаются вместе
+  function pfUsed(src) {
+    let n = 0;
+    catalog.products.forEach(x => { if (x.from === src && qty[x.code]) n += qty[x.code]; });
+    return n;
+  }
+  function updatePfHints() { pfHints.forEach(f => f()); }
 
   function render() {
     if (!catalog) return;
@@ -212,6 +237,7 @@
     const filter = $('search').value.trim().toLowerCase();
     const root = $('content');
     root.innerHTML = '';
+    pfHints.length = 0;
     const nav = $('nav');
     nav.innerHTML = '';
     if (collapsed === null) {                 // первый запуск: по умолчанию для роли
@@ -274,7 +300,9 @@
     d.className = 'row' + (qty[p.code] ? ' sel' : '');
     const st = Number(catalog.stock[p.code] || 0);
     const low = CHECK_STOCK && qty[p.code] > st;
+    const src = MODE === 'r' && p.from ? catalog.products.filter(x => x.code === p.from)[0] : null;
     d.innerHTML = '<div class="name"><b></b><span class="stock' + (low ? ' low' : '') + '"></span>' +
+      (src ? '<span class="pf"></span>' : '') +
       (MODE === 's' ? '<div class="made">' + L('📅 сделан: ', '📅 hecho: ') + '<select></select><span class="per"></span></div>' : '') +
       (MODE === 'b' ? '<div class="made ret">' + L('куда: ', 'destino: ') + '<select class="dst"><option value="0">' + L('утилизация', 'desechar') +
         '</option><option value="1">' + L('на склад', 'al almacén') + '</option></select>' +
@@ -289,6 +317,17 @@
       (half ? '<button class="h" title="' + L('половина', 'mitad') + '">½</button>' : '') + '</div>';
     d.querySelector('b').textContent = p.name;
     d.querySelector('.stock').textContent = L('на складе: ', 'en stock: ') + fmt(st) + ' ' + uLabel(p.unit) + (low ? L(' — не хватает', ' — no alcanza') : '');
+    if (src) {
+      const pfEl = d.querySelector('.pf');
+      const upd = () => {
+        const have = Number(catalog.stock[src.code] || 0), used = pfUsed(src.code);
+        pfEl.textContent = L('из ', 'de ') + src.name + ': ' + fmt(have) + (used ? L(' → останется ', ' → quedarán ') + fmt(have - used) : '') +
+          (used > have ? L(' — не хватает ПФ', ' — falta PF') : '');
+        pfEl.classList.toggle('low', used > have);
+      };
+      pfHints.push(upd);
+      upd();
+    }
     // Возврат: куда идёт (утилизация по умолчанию) и причина
     const dst = d.querySelector('.dst'), rsn = d.querySelector('.rsn');
     const fillReasons = () => {
@@ -347,6 +386,7 @@
       const s = d.querySelector('.stock');
       s.classList.toggle('low', lowNow);
       s.textContent = L('на складе: ', 'en stock: ') + fmt(st) + ' ' + uLabel(p.unit) + (lowNow ? L(' — не хватает', ' — no alcanza') : '');
+      if (MODE === 'r') updatePfHints();
       updateSummary();
     };
     if (half) {
