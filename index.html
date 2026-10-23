@@ -190,6 +190,7 @@
 
   // ПФ (сырые полуфабрикаты) не отгружают и не возвращают — в этих списках их нет
   function prep(d) {
+    d.all = d.products.slice();          // полный справочник (для цепочек ПФ), до фильтров
     if ((MODE === 's' || MODE === 'b') && d.pfCat) d.products = d.products.filter(p => p.cat !== d.pfCat);
     // полки заморозки (Lino ❄️): в списке их нет (кроме списания), но в отгрузке у свежего хлеба
     // есть строка «❄️ из заморозки» — сколько взять с полки для этого получателя
@@ -209,6 +210,20 @@
   }
 
   // «Приготовлено»: у готового из ПФ видно, сколько ПФ на складе; все изделия из одного ПФ считаются вместе
+  // Сколько можно взять изделия с учётом цепочки «ПФ при отгрузке»: Clasico + PF Clásico
+  function availOf(code, depth) {
+    const p = (catalog.all || catalog.products).filter(x => x.code === code)[0];
+    let s = Math.max(0, Number(catalog.stock[code] || 0));
+    if (p && p.pfShip && p.from && (depth || 0) < 5) s += availOf(p.from, (depth || 0) + 1);
+    return s;
+  }
+  // Настоящий источник по цепочке: Pistacho ← Cruasán Clasico ← PF Cruasán Clásico
+  function rootOf(code) {
+    let p = (catalog.all || catalog.products).filter(x => x.code === code)[0], g = 0;
+    while (p && p.pfShip && p.from && g++ < 5) p = (catalog.all || catalog.products).filter(x => x.code === p.from)[0] || p;
+    return p;
+  }
+
   function pfUsed(src) {
     let n = 0;
     catalog.products.forEach(x => { if (x.from === src && qty[x.code]) n += qty[x.code]; });
@@ -352,10 +367,11 @@
     d.className = 'row' + (qty[p.code] ? ' sel' : '');
     // круассаны «ПФ при отгрузке»: в отгрузке доступно готовое + их ПФ
     const pfs = MODE === 's' && p.pfShip;
-    const st = Number(catalog.stock[p.code] || 0) + (pfs ? Number(catalog.stock[p.from] || 0) : 0);
-    const stLbl = pfs ? L(' (с ПФ)', ' (con PF)') : '';
+    const st = pfs ? availOf(p.code) : Number(catalog.stock[p.code] || 0);
+    const srcP = pfs ? (catalog.all || catalog.products).filter(x => x.code === p.from)[0] : null;
+    const stLbl = pfs ? ' (' + L('из ', 'de ') + (srcP ? srcP.name : 'PF') + ')' : '';
     const low = CHECK_STOCK && qty[p.code] > st;
-    const src = MODE === 'r' && p.from ? catalog.products.filter(x => x.code === p.from)[0] : null;
+    const src = MODE === 'r' && p.from ? (catalog.all || catalog.products).filter(x => x.code === p.from)[0] : null;
     d.innerHTML = '<div class="name"><b></b><span class="stock' + (low ? ' low' : '') + '"></span>' +
       (src ? '<span class="pf"></span>' : '') +
       (MODE === 's' ? '<div class="made">' + L('📅 сделан: ', '📅 hecho: ') + '<select></select><span class="per"></span></div>' : '') +
@@ -375,8 +391,8 @@
     if (src) {
       const pfEl = d.querySelector('.pf');
       const upd = () => {
-        const have = Number(catalog.stock[src.code] || 0), used = pfUsed(src.code);
-        pfEl.textContent = L('из ', 'de ') + src.name + ': ' + fmt(have) + (used ? L(' → останется ', ' → quedarán ') + fmt(have - used) : '') +
+        const have = availOf(src.code), used = pfUsed(src.code);
+        pfEl.textContent = L('из ', 'de ') + (rootOf(src.code) || src).name + ': ' + fmt(have) + (used ? L(' → останется ', ' → quedarán ') + fmt(have - used) : '') +
           (used > have ? L(' — не хватает ПФ', ' — falta PF') : '');
         pfEl.classList.toggle('low', used > have);
       };
@@ -579,12 +595,17 @@
     if (MODE === 's' || MODE === 'w') it.forEach(([c, v, a, f]) => {
       const pp = byCode[c] || {};
       const fresh = v - (MODE === 's' ? (f || 0) : 0),
-            have = Number(catalog.stock[c] || 0) + (MODE === 's' && pp.pfShip ? Number(catalog.stock[pp.from] || 0) : 0);
+            have = MODE === 's' && pp.pfShip ? availOf(c) : Number(catalog.stock[c] || 0);
       if (fresh > have) warn.push((byCode[c] ? byCode[c].name : c) + ': ' + L('есть ', 'hay ') + fmt(have));
       const sh = MODE === 's' && f ? shelfFor(c) : null;
       if (sh && f > Number(catalog.stock[sh.code] || 0)) warn.push('❄️ ' + sh.name + ': ' + L('есть ', 'hay ') + fmt(catalog.stock[sh.code] || 0));
     });
     const warnText = warn.length ? L('\n\n⚠️ Не хватает на складе:\n', '\n\n⚠️ No hay suficiente:\n') + warn.join('\n') : '';
+    // отгрузку без остатка не записываем (сервер тоже проверит)
+    if (MODE === 's' && warn.length) {
+      alertMsg(L('⛔ Не хватает на складе — отгрузка не записывается:\n', '⛔ No hay suficiente — el envío no se guarda:\n') + warn.join('\n'));
+      return;
+    }
     const text = head + ':\n' + lines.join('\n') + warnText;
     const go = () => {
       const payload = { m: MODE, i: it };
