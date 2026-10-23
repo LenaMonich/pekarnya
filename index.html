@@ -92,7 +92,7 @@
   <h1 id="title">…</h1>
   <div id="rests" class="chips" style="display:none"></div>
   <label id="extraBox" class="extra" style="display:none"><input type="checkbox" id="extra"> <span id="extraTxt">⚡ Доп. рейс сегодня (бланк придёт сразу)</span></label>
-  <label id="openBox" class="extra" style="display:none"><input type="checkbox" id="opening"> <span id="openTxt">📦 Начальный остаток (не в Producción, ПФ не списывается)</span></label>
+  <label id="openBox" class="extra" style="display:none"><input type="checkbox" id="opening"> <span id="openTxt">📦 Инвентаризация: вписываю, сколько есть на самом деле (можно 0)</span></label>
   <input id="search" type="search" placeholder="Поиск продукта">
   <div id="nav" class="nav"></div>
 </header>
@@ -162,7 +162,7 @@
     document.documentElement.lang = 'es';
     document.title = 'Obrador';
     $('extraTxt').textContent = '⚡ Viaje extra hoy (el albarán llega al momento)';
-    $('openTxt').textContent = '📦 Stock inicial (no entra en Producción, no descuenta PF)';
+    $('openTxt').textContent = '📦 Inventario: escribo cuánto hay de verdad (se puede 0)';
     $('search').placeholder = 'Buscar producto';
     $('msg').textContent = 'Cargando…';
     $('saveBtn').textContent = 'Guardar';
@@ -429,7 +429,9 @@
     const set = (v, keepText) => {
       v = half ? Math.round((parseFloat(String(v).replace(',', '.')) || 0) * 2) / 2 : (parseInt(v, 10) || 0);
       v = Math.max(0, Math.min(100000, v));
-      if (v) qty[p.code] = v; else delete qty[p.code];
+      // инвентаризация: вписанный 0 — тоже значение («на складе ничего нет»)
+      const inv0 = MODE === 'r' && $('opening').checked && keepText && String(inp.value).trim() !== '';
+      if (v || inv0) qty[p.code] = v; else delete qty[p.code];
       if (!keepText) inp.value = v ? fmt(v) : '';
       d.classList.toggle('sel', !!(v || fzq[p.code]));
       const lowNow = CHECK_STOCK && v > st;
@@ -443,7 +445,8 @@
       inp.addEventListener('input', () => set(inp.value.replace(/[^\d.,]/g, ''), true));
       inp.addEventListener('blur', () => set(qty[p.code] || 0));
     } else {
-      inp.addEventListener('input', () => set(inp.value.replace(/\D/g, '')));
+      // «0» оставляем в поле как есть (для инвентаризации это значит «нет на складе»)
+      inp.addEventListener('input', () => set(inp.value.replace(/\D/g, ''), /^0+$/.test(inp.value.trim())));
     }
     const m = d.querySelector('.m'), pl = d.querySelector('.p'), hb = d.querySelector('.h');
     if (m) m.onclick = () => { haptic(); set((qty[p.code] || 0) - 1); };
@@ -565,20 +568,30 @@
       ? L('Отгрузка → ', 'Envío → ') + catalog.restaurants[rest] + ($('extra').checked ? L(' (доп. рейс)', ' (viaje extra)') : '')
       : MODE === 'b' ? L('Возврат ← ', 'Devolución ← ') + catalog.restaurants[rest]
       : MODE === 'w' ? L('Списание', 'Desechar')
-      : $('opening').checked ? L('Начальный остаток', 'Stock inicial') : L('Приготовлено', 'Elaborado');
-    const text = head + ':\n' + lines.join('\n');
+      : $('opening').checked ? L('Инвентаризация (есть на самом деле)', 'Inventario (hay de verdad)') : L('Приготовлено', 'Elaborado');
+    // отгрузка и списание: предупредить, если берём больше, чем есть
+    const warn = [];
+    if (MODE === 's' || MODE === 'w') it.forEach(([c, v, a, f]) => {
+      const fresh = v - (MODE === 's' ? (f || 0) : 0), have = Number(catalog.stock[c] || 0);
+      if (fresh > have) warn.push((byCode[c] ? byCode[c].name : c) + ': ' + L('есть ', 'hay ') + fmt(have));
+      const sh = MODE === 's' && f ? shelfFor(c) : null;
+      if (sh && f > Number(catalog.stock[sh.code] || 0)) warn.push('❄️ ' + sh.name + ': ' + L('есть ', 'hay ') + fmt(catalog.stock[sh.code] || 0));
+    });
+    const warnText = warn.length ? L('\n\n⚠️ Не хватает на складе:\n', '\n\n⚠️ No hay suficiente:\n') + warn.join('\n') : '';
+    const text = head + ':\n' + lines.join('\n') + warnText;
     const go = () => {
       const payload = { m: MODE, i: it };
       if (NEEDS_REST) payload.r = catalog.restaurants[rest];
       if (MODE === 's') payload.x = $('extra').checked ? 1 : 0;
-      if (MODE === 'r' && $('opening').checked) payload.o = 1;
+      if (MODE === 'r' && $('opening').checked) payload.o = 2;     // инвентаризация
       const s = JSON.stringify(payload);
       if (!canSend) { alertMsg(L('Откройте страницу кнопкой в боте — тогда можно сохранять.', 'Abre la página con el botón del bot para poder guardar.')); return; }
       if (s.length > 4000) { alertMsg(L('Слишком много позиций за раз — разделите на две записи.', 'Demasiados productos a la vez: divídelo en dos registros.')); return; }
       tg.sendData(s);   // бот получит список и запишет в таблицу; окно закроется
     };
     // окно подтверждения Telegram вмещает ~250 символов — для длинного списка показываем кратко
-    const short = text.length < 230 ? text : head + ': ' + it.length + L(' поз.', ' prod.');
+    const short = text.length < 230 ? text : head + ': ' + it.length + L(' поз.', ' prod.') +
+      (warn.length ? L('\n⚠️ Не хватает на складе: ', '\n⚠️ No hay suficiente: ') + warn.length + L(' поз.', ' prod.') : '');
     if (canSend && tg.showConfirm) tg.showConfirm(short + L('\n\nЗаписать?', '\n\n¿Guardar?'), ok => { if (ok) go(); });
     else if (confirm(text + L('\n\nЗаписать?', '\n\n¿Guardar?'))) go();
   };
