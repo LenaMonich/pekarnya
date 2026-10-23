@@ -198,6 +198,8 @@
     // «Приготовлено» и «Отгрузка»: кондитер и пекари видят только своё (админ — всё)
     const role = VIEW === 'b' ? 'b1' : VIEW;
     if (MODE === 'r' && ['c', 'b1', 'b2'].indexOf(role) >= 0) d.products = d.products.filter(p => !p.mk || p.mk.indexOf(role) >= 0);
+    // круассаны «ПФ при отгрузке» в «Приготовлено» не записывают (кроме админа — для инвентаризации)
+    if (MODE === 'r' && role !== 'a') d.products = d.products.filter(p => !p.pfShip);
     // «Отгрузка»: пекарь 1 отгружает и готовое пекаря 2 (из бота: shipFor)
     if (MODE === 's' && ['c', 'b1', 'b2'].indexOf(role) >= 0) {
       const can = (d.shipFor && d.shipFor[role]) || [role];
@@ -348,7 +350,10 @@
     const half = !!p.portions && MODE !== 'r' && !grams;
     const d = document.createElement('div');
     d.className = 'row' + (qty[p.code] ? ' sel' : '');
-    const st = Number(catalog.stock[p.code] || 0);
+    // круассаны «ПФ при отгрузке»: в отгрузке доступно готовое + их ПФ
+    const pfs = MODE === 's' && p.pfShip;
+    const st = Number(catalog.stock[p.code] || 0) + (pfs ? Number(catalog.stock[p.from] || 0) : 0);
+    const stLbl = pfs ? L(' (с ПФ)', ' (con PF)') : '';
     const low = CHECK_STOCK && qty[p.code] > st;
     const src = MODE === 'r' && p.from ? catalog.products.filter(x => x.code === p.from)[0] : null;
     d.innerHTML = '<div class="name"><b></b><span class="stock' + (low ? ' low' : '') + '"></span>' +
@@ -366,7 +371,7 @@
       (grams ? '<span class="unit">' + uLabel('г') + '</span>' : '<button class="p">+</button>') +
       (half ? '<button class="h" title="' + L('половина', 'mitad') + '">½</button>' : '') + '</div>';
     d.querySelector('b').textContent = p.name;
-    d.querySelector('.stock').textContent = L('на складе: ', 'en stock: ') + fmt(st) + ' ' + uLabel(p.unit) + (low ? L(' — не хватает', ' — no alcanza') : '');
+    d.querySelector('.stock').textContent = L('на складе: ', 'en stock: ') + fmt(st) + ' ' + uLabel(p.unit) + stLbl + (low ? L(' — не хватает', ' — no alcanza') : '');
     if (src) {
       const pfEl = d.querySelector('.pf');
       const upd = () => {
@@ -437,7 +442,7 @@
       const lowNow = CHECK_STOCK && v > st;
       const s = d.querySelector('.stock');
       s.classList.toggle('low', lowNow);
-      s.textContent = L('на складе: ', 'en stock: ') + fmt(st) + ' ' + uLabel(p.unit) + (lowNow ? L(' — не хватает', ' — no alcanza') : '');
+      s.textContent = L('на складе: ', 'en stock: ') + fmt(st) + ' ' + uLabel(p.unit) + stLbl + (lowNow ? L(' — не хватает', ' — no alcanza') : '');
       if (MODE === 'r') updatePfHints();
       updateSummary();
     };
@@ -572,7 +577,9 @@
     // отгрузка и списание: предупредить, если берём больше, чем есть
     const warn = [];
     if (MODE === 's' || MODE === 'w') it.forEach(([c, v, a, f]) => {
-      const fresh = v - (MODE === 's' ? (f || 0) : 0), have = Number(catalog.stock[c] || 0);
+      const pp = byCode[c] || {};
+      const fresh = v - (MODE === 's' ? (f || 0) : 0),
+            have = Number(catalog.stock[c] || 0) + (MODE === 's' && pp.pfShip ? Number(catalog.stock[pp.from] || 0) : 0);
       if (fresh > have) warn.push((byCode[c] ? byCode[c].name : c) + ': ' + L('есть ', 'hay ') + fmt(have));
       const sh = MODE === 's' && f ? shelfFor(c) : null;
       if (sh && f > Number(catalog.stock[sh.code] || 0)) warn.push('❄️ ' + sh.name + ': ' + L('есть ', 'hay ') + fmt(catalog.stock[sh.code] || 0));
