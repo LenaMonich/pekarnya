@@ -240,9 +240,10 @@
     $('msg').style.display = 'none';
     // админ в «Приготовлено» может внести начальный остаток (например, ПФ, которые уже лежат на складе)
     if (MODE === 'r' && VIEW === 'a') $('openBox').style.display = 'flex';
-    // админ может записать задним числом (забыли вчера): до 14 дней назад
-    if (VIEW === 'a' && !$('dt').options.length) {
-      for (let a = 0; a <= 14; a++) {
+    // задним числом (забыли вчера): админ — до 14 дней, пекарь 1 — только вчера (из бота: backMax)
+    const backMax = ((catalog.backMax || { a: 14, b1: 1 })[VIEW === 'b' ? 'b1' : VIEW]) || 0;
+    if (backMax && !$('dt').options.length) {
+      for (let a = 0; a <= backMax; a++) {
         const o = document.createElement('option');
         o.value = a;
         o.textContent = (a === 0 ? L('сегодня, ', 'hoy, ') : a === 1 ? L('вчера, ', 'ayer, ') : '') + dayText(a);
