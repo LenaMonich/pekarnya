@@ -31,6 +31,8 @@
     background: var(--bg); color: var(--text); max-width: 100%; }
   .extra { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 8px; }
   .extra input { width: 20px; height: 20px; accent-color: var(--accent); }
+  .extra select { font-size: 14px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); }
   #search { width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line);
     background: var(--bg); color: var(--text); font-size: 16px; }
   .nav { display: flex; gap: 6px; overflow-x: auto; margin-top: 8px; padding-bottom: 2px; scrollbar-width: none; }
@@ -92,6 +94,7 @@
   <h1 id="title">…</h1>
   <div id="rests" class="chips" style="display:none"></div>
   <label id="extraBox" class="extra" style="display:none"><input type="checkbox" id="extra"> <span id="extraTxt">⚡ Доп. рейс сегодня (бланк придёт сразу)</span></label>
+  <label id="dtBox" class="extra" style="display:none">📅 <span id="dtTxt">Дата записи:</span> <select id="dt"></select></label>
   <label id="openBox" class="extra" style="display:none"><input type="checkbox" id="opening"> <span id="openTxt">📦 Инвентаризация: вписываю, сколько есть на самом деле (можно 0)</span></label>
   <input id="search" type="search" placeholder="Поиск продукта">
   <div id="nav" class="nav"></div>
@@ -163,6 +166,7 @@
     document.title = 'Obrador';
     $('extraTxt').textContent = '⚡ Viaje extra hoy (el albarán llega al momento)';
     $('openTxt').textContent = '📦 Inventario: escribo cuánto hay de verdad (se puede 0)';
+    $('dtTxt').textContent = 'Fecha del registro:';
     $('search').placeholder = 'Buscar producto';
     $('msg').textContent = 'Cargando…';
     $('saveBtn').textContent = 'Guardar';
@@ -236,6 +240,16 @@
     $('msg').style.display = 'none';
     // админ в «Приготовлено» может внести начальный остаток (например, ПФ, которые уже лежат на складе)
     if (MODE === 'r' && VIEW === 'a') $('openBox').style.display = 'flex';
+    // админ может записать задним числом (забыли вчера): до 14 дней назад
+    if (VIEW === 'a' && !$('dt').options.length) {
+      for (let a = 0; a <= 14; a++) {
+        const o = document.createElement('option');
+        o.value = a;
+        o.textContent = (a === 0 ? L('сегодня, ', 'hoy, ') : a === 1 ? L('вчера, ', 'ayer, ') : '') + dayText(a);
+        $('dt').appendChild(o);
+      }
+      $('dtBox').style.display = 'flex';
+    }
     if (NEEDS_REST) renderRestaurants();
     renderList();
     updateSummary();
@@ -606,12 +620,14 @@
       alertMsg(L('⛔ Не хватает на складе — отгрузка не записывается:\n', '⛔ No hay suficiente — el envío no se guarda:\n') + warn.join('\n'));
       return;
     }
-    const text = head + ':\n' + lines.join('\n') + warnText;
+    const back = Number($('dt').value) || 0;
+    const text = head + (back ? ' · 📅 ' + dayText(back) : '') + ':\n' + lines.join('\n') + warnText;
     const go = () => {
       const payload = { m: MODE, i: it };
       if (NEEDS_REST) payload.r = catalog.restaurants[rest];
       if (MODE === 's') payload.x = $('extra').checked ? 1 : 0;
       if (MODE === 'r' && $('opening').checked) payload.o = 2;     // инвентаризация
+      if (back) payload.dt = back;                                // задним числом
       const s = JSON.stringify(payload);
       if (!canSend) { alertMsg(L('Откройте страницу кнопкой в боте — тогда можно сохранять.', 'Abre la página con el botón del bot para poder guardar.')); return; }
       if (s.length > 4000) { alertMsg(L('Слишком много позиций за раз — разделите на две записи.', 'Demasiados productos a la vez: divídelo en dos registros.')); return; }
