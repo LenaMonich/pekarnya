@@ -82,6 +82,7 @@
     border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
   .made .per.bad { color: #d9342b; font-weight: 600; }
   #msg { margin: 30px 16px; text-align: center; color: var(--hint); }
+  #stale { display: none; margin: 6px 12px 0; padding: 6px 10px; border-radius: 8px; background: #fff4d6; color: #7a5600; font-size: 13px; }
   #summary { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
     background: var(--bg); border-top: 1px solid var(--line); font-size: 14px; display: none; }
   #summary button { width: 100%; margin-top: 8px; padding: 13px; border: none; border-radius: 12px;
@@ -99,6 +100,7 @@
   <input id="search" type="search" placeholder="Поиск продукта">
   <div id="nav" class="nav"></div>
 </header>
+<div id="stale"></div>
 <div id="msg">Загрузка…</div>
 <div id="content"></div>
 <div class="pad"></div>
@@ -176,18 +178,34 @@
   // Если открыли не из бота — сохранять нечем, но страницу показываем
   const canSend = !!(tg && tg.sendData && tg.platform && tg.platform !== 'unknown');
 
-  // 1) показываем сохранённый справочник сразу (мгновенно), 2) обновляем с сервера
-  try { const c = localStorage.getItem(CACHE); if (c) { catalog = prep(JSON.parse(c)); render(); } } catch (e) {}
-  if (API) {
-    fetch(API + (API.indexOf('?') >= 0 ? '&' : '?') + 'a=catalog&k=' + encodeURIComponent(KEY), { redirect: 'follow' })
+  // 1) показываем сохранённый справочник сразу (мгновенно), 2) обновляем с сервера.
+  // Остатки из сохранённого — старые: пока свежие не пришли, «не хватает» не блокирует (сервер всё равно проверит).
+  let fresh = false;
+  const staleBox = $('stale');
+  const showStale = t => { staleBox.textContent = t; staleBox.style.display = t ? 'block' : 'none'; };
+  try { const c = localStorage.getItem(CACHE); if (c) { catalog = prep(JSON.parse(c)); render(); showStale(L('⏳ Обновляю остатки…', '⏳ Actualizando stock…')); } } catch (e) {}
+  function loadCatalog(attempt) {
+    // метка времени в адресе + no-store: Android (WebView) иначе может отдать старый ответ из своего кэша
+    const url = API + (API.indexOf('?') >= 0 ? '&' : '?') + 'a=catalog&k=' + encodeURIComponent(KEY) + '&t=' + Date.now();
+    fetch(url, { redirect: 'follow', cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         if (!d || !d.products) throw new Error(d && d.error || L('нет данных', 'sin datos'));
         try { localStorage.setItem(CACHE, JSON.stringify(d)); } catch (e) {}
         catalog = prep(d);
+        fresh = true;
+        showStale('');
         render();
       })
-      .catch(err => { if (!catalog) $('msg').textContent = L('Не удалось загрузить список продуктов: ', 'No se pudo cargar la lista de productos: ') + err.message; });
+      .catch(err => {
+        if (attempt < 2) { setTimeout(() => loadCatalog(attempt + 1), 1500); return; }
+        if (!catalog) $('msg').textContent = L('Не удалось загрузить список продуктов: ', 'No se pudo cargar la lista de productos: ') + err.message;
+        else showStale(L('⚠️ Не получилось обновить остатки — цифры могут быть старые. Закройте окно и откройте снова.',
+                         '⚠️ No se pudo actualizar el stock: las cifras pueden ser antiguas. Cierra y vuelve a abrir.'));
+      });
+  }
+  if (API) {
+    loadCatalog(0);
   } else if (!catalog) {
     $('msg').textContent = L('Откройте эту страницу кнопкой в боте.', 'Abre esta página con el botón del bot.');
   }
@@ -616,8 +634,8 @@
       if (sh && f > Number(catalog.stock[sh.code] || 0)) warn.push('❄️ ' + sh.name + ': ' + L('есть ', 'hay ') + fmt(catalog.stock[sh.code] || 0));
     });
     const warnText = warn.length ? L('\n\n⚠️ Не хватает на складе:\n', '\n\n⚠️ No hay suficiente:\n') + warn.join('\n') : '';
-    // отгрузку без остатка не записываем (сервер тоже проверит)
-    if (MODE === 's' && warn.length) {
+    // отгрузку без остатка не записываем (сервер тоже проверит); пока остатки не обновились — решает сервер
+    if (MODE === 's' && warn.length && fresh) {
       alertMsg(L('⛔ Не хватает на складе — отгрузка не записывается:\n', '⛔ No hay suficiente — el envío no se guarda:\n') + warn.join('\n'));
       return;
     }
