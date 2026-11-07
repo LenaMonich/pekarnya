@@ -129,6 +129,9 @@
   // Вид списка по роли: 'c' — кондитер/админ, 'b' — пекарь, иначе — порядок как в таблице, всё раскрыто.
   // order — какие разделы и в каком порядке идут первыми (остальные следом), closed — что свёрнуто по умолчанию.
   const VIEW = q.get('v') || '';
+  // двойная роль приходит как «c.b1» — человек видит всё, что обе роли
+  const ROLES = VIEW.split('.').filter(Boolean).map(r => (r === 'b' ? 'b1' : r));
+  const isWorker = ROLES.length > 0 && ROLES.every(r => ['c', 'b1', 'b2'].indexOf(r) >= 0);
   const VIEWS_DEFAULT = {
     c: { order: ['Postre', 'Mermelada', 'Producto Semiacabado', 'Pan', 'Cruasán y Bollería'], closed: ['Pan', 'Cruasán y Bollería'] },
     b: { order: ['Pan', 'Cruasán y Bollería', 'Producto Semiacabado', 'Mermelada', 'Postre'], closed: ['Mermelada', 'Postre'] },
@@ -219,13 +222,13 @@
     d.shelves = d.products.filter(p => p.fz);
     if (MODE !== 'w') d.products = d.products.filter(p => !p.fz);
     // «Приготовлено» и «Отгрузка»: кондитер и пекари видят только своё (админ — всё)
-    const role = VIEW === 'b' ? 'b1' : VIEW;
-    if (MODE === 'r' && ['c', 'b1', 'b2'].indexOf(role) >= 0) d.products = d.products.filter(p => !p.mk || p.mk.indexOf(role) >= 0);
+    if (MODE === 'r' && isWorker) d.products = d.products.filter(p => !p.mk || p.mk.some(x => ROLES.indexOf(x) >= 0));
     // круассаны «ПФ при отгрузке» в «Приготовлено» не записывают (кроме админа — для инвентаризации)
-    if (MODE === 'r' && role !== 'a') d.products = d.products.filter(p => !p.pfShip);
-    // «Отгрузка»: пекарь 1 отгружает и готовое пекаря 2 (из бота: shipFor)
-    if (MODE === 's' && ['c', 'b1', 'b2'].indexOf(role) >= 0) {
-      const can = (d.shipFor && d.shipFor[role]) || [role];
+    if (MODE === 'r' && VIEW !== 'a') d.products = d.products.filter(p => !p.pfShip);
+    // «Отгрузка»: пекарь 1 отгружает и готовое пекаря 2 (из бота: shipFor); у двойной роли — всё вместе
+    if (MODE === 's' && isWorker) {
+      const can = [];
+      ROLES.forEach(r => ((d.shipFor && d.shipFor[r]) || [r]).forEach(x => { if (can.indexOf(x) < 0) can.push(x); }));
       d.products = d.products.filter(p => !p.mk || p.mk.some(x => can.indexOf(x) >= 0));
     }
     return d;
@@ -259,7 +262,8 @@
     // админ в «Приготовлено» может внести начальный остаток (например, ПФ, которые уже лежат на складе)
     if (MODE === 'r' && VIEW === 'a') $('openBox').style.display = 'flex';
     // задним числом (забыли вчера): админ — до 14 дней, пекарь 1 — только вчера (из бота: backMax)
-    const backMax = ((catalog.backMax || { a: 14, b1: 1 })[VIEW === 'b' ? 'b1' : VIEW]) || 0;
+    const bm = catalog.backMax || { a: 14, b1: 1 };
+    const backMax = Math.max.apply(null, [0].concat(ROLES.map(r => bm[r] || 0)));
     if (backMax && !$('dt').options.length) {
       for (let a = 0; a <= backMax; a++) {
         const o = document.createElement('option');
@@ -317,7 +321,15 @@
   }
 
   // Настройки вида: из бота (catalog.views), иначе встроенные
-  function view() { return ((catalog && catalog.views) || VIEWS_DEFAULT)[VIEW] || null; }
+  function view() {
+    const all = (catalog && catalog.views) || VIEWS_DEFAULT;
+    const vs = ROLES.map(r => all[r] || (r === 'b1' ? all.b : null)).filter(Boolean);
+    if (!vs.length) return null;
+    if (vs.length === 1) return vs[0];
+    // двойная роль: порядок разделов — по первой роли, свёрнуто только то, что свёрнуто у обеих
+    return { order: vs[0].order.concat(vs[1].order.filter(c => vs[0].order.indexOf(c) < 0)),
+             closed: vs[0].closed.filter(c => vs.every(v => v.closed.indexOf(c) >= 0)) };
+  }
 
   // Категории в порядке для роли; разделы, которых нет в настройке вида, идут после перечисленных
   function orderedCats() {
